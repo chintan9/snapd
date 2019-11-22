@@ -1,0 +1,13 @@
+version = 1
+
+[[analyzers]]
+name = "go"
+enabled = true
+
+test_patterns = [
+  "tests/*_test.go",
+  "**/*_test.go"
+]
+
+  [analyzers.meta]
+  import_path = "github.com/chintan9/snapd"
