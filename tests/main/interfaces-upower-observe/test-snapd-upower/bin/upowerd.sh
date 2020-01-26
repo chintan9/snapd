@@ -22,7 +22,7 @@ if [ -e "$SNAP_DATA/config" ]; then
 fi
 
 UPOWER_OPTS=
-if [ $DEBUG = true ]; then
+if [ "$DEBUG" = true ]; then
 	UPOWER_OPTS="-v"
 fi
 
@@ -32,6 +32,6 @@ if [ ! -e "$SNAP_DATA/UPower.conf" ]; then
 	cp "$SNAP/etc/UPower/UPower.conf" "$SNAP_DATA"
 fi
 
-export UPOWER_CONF_FILE_NAME=$SNAP_DATA/UPower.conf
+export UPOWER_CONF_FILE_NAME="$SNAP_DATA"/UPower.conf
 
-exec "$SNAP/usr/libexec/upowerd" $UPOWER_OPTS
+exec "$SNAP/usr/libexec/upowerd" "$UPOWER_OPTS"
