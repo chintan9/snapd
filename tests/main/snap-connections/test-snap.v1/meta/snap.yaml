@@ -4,4 +4,3 @@ summary: Basic test snap
 
 plugs:
   log-observe:
-
