@@ -17,19 +17,19 @@
 DEBUG=false
 
 if [ -e "$SNAP_DATA/config" ]; then
-	# shellcheck source=/dev/null
-	. "$SNAP_DATA/config"
+  # shellcheck source=/dev/null
+  . "$SNAP_DATA/config"
 fi
 
 UPOWER_OPTS=
 if [ "$DEBUG" = true ]; then
-	UPOWER_OPTS="-v"
+  UPOWER_OPTS="-v"
 fi
 
 mkdir -p "$SNAP_COMMON/history"
 
 if [ ! -e "$SNAP_DATA/UPower.conf" ]; then
-	cp "$SNAP/etc/UPower/UPower.conf" "$SNAP_DATA"
+  cp "$SNAP/etc/UPower/UPower.conf" "$SNAP_DATA"
 fi
 
 export UPOWER_CONF_FILE_NAME="$SNAP_DATA"/UPower.conf
