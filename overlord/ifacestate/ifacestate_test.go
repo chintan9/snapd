@@ -2659,7 +2659,7 @@ version: 1
 plugs:
  plug:
   interface: content
-  content: foo 
+  content: foo
   attr: new-plug-attr
 `
 	const producerYaml = `
@@ -2668,7 +2668,7 @@ version: 1
 slots:
  slot:
   interface: content
-  content: foo 
+  content: foo
   attr: new-slot-attr
 `
 	s.mockSnap(c, producerYaml)
