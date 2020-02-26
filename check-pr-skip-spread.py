@@ -1,9 +1,7 @@
 #!/usr/bin/python3
-
 import argparse
-import urllib.request
 import logging
-
+import urllib.request
 from html.parser import HTMLParser
 
 # PR label indicating that spread job should be skipped

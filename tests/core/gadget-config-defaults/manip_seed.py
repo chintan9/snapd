@@ -1,6 +1,7 @@
 import sys
-import yaml
 from os import path
+
+import yaml
 
 with open(sys.argv[1]) as f:
     seed = yaml.load(f)
