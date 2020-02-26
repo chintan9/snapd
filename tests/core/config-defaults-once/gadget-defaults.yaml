@@ -1,7 +1,7 @@
 defaults:
-   system:
-     service:
-       ssh:
-         disable: true
-       rsyslog:
-         disable: true
+  system:
+    service:
+      ssh:
+        disable: true
+      rsyslog:
+        disable: true
