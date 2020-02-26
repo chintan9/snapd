@@ -4,10 +4,10 @@ prepare: |
   cp /etc/default/swapfile swapfile.bk
 
 restore: |
-  if [ -f swapfile.bk ]; then 
+  if [ -f swapfile.bk ]; then
     cp swapfile.bk /etc/default/swapfile
 
-    # enabling the service now again will set swap to 0 because SIZE=0 means 
+    # enabling the service now again will set swap to 0 because SIZE=0 means
     # don't create a swap file
     systemctl enable --now swapfile.service || true
   fi
@@ -18,7 +18,7 @@ execute: |
   sed -e "s/SIZE=0/SIZE=200/" /etc/default/swapfile > /tmp/swapfile
   cat /tmp/swapfile > /etc/default/swapfile
 
-  echo "Turn on the swap service" 
+  echo "Turn on the swap service"
   systemctl enable --now swapfile.service
 
   # source the file so that we can grep for the location of the swap file as

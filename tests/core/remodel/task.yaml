@@ -20,7 +20,7 @@ prepare: |
   rm -rf /var/lib/snapd/state.json
   mv /var/lib/snapd/seed/assertions/model model.bak
   cp "$TESTSLIB"/assertions/developer1.account /var/lib/snapd/seed/assertions
-  cp "$TESTSLIB"/assertions/developer1.account-key /var/lib/snapd/seed/assertions    
+  cp "$TESTSLIB"/assertions/developer1.account-key /var/lib/snapd/seed/assertions
   if is_core18_system; then
       cp "$TESTSLIB"/assertions/developer1-pc-18.model /var/lib/snapd/seed/assertions/developer1-pc.model
       cp "$TESTSLIB"/assertions/developer1-pc-18-revno2.model developer1-pc-revno2.model

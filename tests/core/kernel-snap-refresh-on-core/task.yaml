@@ -44,7 +44,7 @@ execute: |
   elif [ "$SPREAD_REBOOT" = 1 ]; then
       # from our good starting place we refresh
       wait_core_post_boot
-      
+
       # save current core revision
       snap list | awk "/^pc-kernel / {print(\$3)}" > prevBoot
       cat /proc/version_signature > prevKernelSignature
@@ -81,7 +81,7 @@ execute: |
           echo "SKIPPING: kernel in edge / stable are the same"
           exit 0
       fi
-      
+
       # test-snapd-sh works
       test-snapd-sh.sh -c 'echo hello' | MATCH hello
 
@@ -102,7 +102,7 @@ execute: |
 
       echo we are back to the original kernel
       diff -u /proc/version_signature prevKernelSignature
-      
+
       # test-snapd-sh works
       test-snapd-sh.sh -c 'echo hello' | MATCH hello
   fi

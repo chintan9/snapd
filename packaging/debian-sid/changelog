@@ -185,7 +185,7 @@ snapd (2.37.3-1) unstable; urgency=medium
 
 snapd (2.37.2-1) unstable; urgency=medium
 
-  * New upstream releease. 
+  * New upstream releease.
 
  -- Michael Hudson-Doyle <mwhudson@debian.org>  Thu, 07 Feb 2019 21:26:34 +1300
 

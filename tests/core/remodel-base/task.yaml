@@ -47,7 +47,7 @@ restore: |
   systemctl start snapd.service snapd.socket
   # wait for first boot to be done
   snap wait system seed.loaded
-  retry-tool -n 60 --wait 5 sh -c 'snap changes | grep -q "Done.*Initialize system state"'    
+  retry-tool -n 60 --wait 5 sh -c 'snap changes | grep -q "Done.*Initialize system state"'
   # extra paranoia because failure to cleanup earlier took us a long time
   # to find
   if [ -e /var/snap/$NEW_BASE/current ]; then
@@ -78,7 +78,7 @@ execute: |
       done
       snap changes | MATCH "[0-9]+\\ +Done\\ +.* $chg_summary"
   }
-  # initial boot with the current model 
+  # initial boot with the current model
   if [ "$SPREAD_REBOOT" = 0 ]; then
       # sanity check
       snap list "$OLD_BASE"

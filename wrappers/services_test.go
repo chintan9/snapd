@@ -209,7 +209,7 @@ func (s *servicesTestSuite) TestServicesEnableState(c *C) {
 
 	case "$1" in
 		is-enabled)
-			case "$2" in 
+			case "$2" in
 			"snap.hello-snap.svc1.service")
 				echo "disabled"
 				exit 1
@@ -311,7 +311,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServices(c *C) {
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					echo "unexpected enable of disabled service $2"
 					exit 1
@@ -364,7 +364,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServicesNowApp(c *C) 
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					exit 0
 					;;
@@ -418,7 +418,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServicesMissing(c *C)
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					exit 0
 					;;
