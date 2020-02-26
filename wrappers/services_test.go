@@ -209,7 +209,7 @@ func (s *servicesTestSuite) TestServicesEnableState(c *C) {
 
 	case "$1" in
 		is-enabled)
-			case "$2" in 
+			case "$2" in
 			"snap.hello-snap.svc1.service")
 				echo "disabled"
 				exit 1
@@ -311,7 +311,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServices(c *C) {
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					echo "unexpected enable of disabled service $2"
 					exit 1
@@ -364,7 +364,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServicesNowApp(c *C) 
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					exit 0
 					;;
@@ -418,7 +418,7 @@ func (s *servicesTestSuite) TestAddSnapServicesWithDisabledServicesMissing(c *C)
 
 	case "$1" in
 		enable)
-			case "$2" in 
+			case "$2" in
 				"snap.hello-snap.svc1.service")
 					exit 0
 					;;
@@ -523,6 +523,18 @@ func (s *servicesTestSuite) TestStartServices(c *C) {
 	c.Assert(s.sysdLog, DeepEquals, [][]string{
 		{"--root", s.tempdir, "is-enabled", filepath.Base(svcFile)},
 		{"start", filepath.Base(svcFile)},
+	})
+}
+
+func (s *servicesTestSuite) TestEnableServices(c *C) {
+	info := snaptest.MockSnap(c, packageHello, &snap.SideInfo{Revision: snap.R(12)})
+	svcFile := filepath.Join(s.tempdir, "/etc/systemd/system/snap.hello-snap.svc1.service")
+
+	err := wrappers.EnableSnapServices(info, nil)
+	c.Assert(err, IsNil)
+
+	c.Assert(s.sysdLog, DeepEquals, [][]string{
+		{"--root", s.tempdir, "enable", filepath.Base(svcFile)},
 	})
 }
 
@@ -1357,4 +1369,14 @@ func (s *servicesTestSuite) TestServiceRestartDelay(c *C) {
 	content, err = ioutil.ReadFile(filepath.Join(s.tempdir, "/etc/systemd/system/snap.hello-snap.svc3.service"))
 	c.Assert(err, IsNil)
 	c.Check(strings.Contains(string(content), "RestartSec="), Equals, false)
+}
+
+func (s *servicesTestSuite) TestAddRemoveSnapServiceWithSnapd(c *C) {
+	info := makeMockSnapdSnap(c)
+
+	err := wrappers.AddSnapServices(info, nil, progress.Null)
+	c.Check(err, ErrorMatches, "internal error: adding explicit services for snapd snap is unexpected")
+
+	err = wrappers.RemoveSnapServices(info, progress.Null)
+	c.Check(err, ErrorMatches, "internal error: removing explicit services for snapd snap is unexpected")
 }

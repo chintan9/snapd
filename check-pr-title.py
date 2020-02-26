@@ -1,13 +1,7 @@
 #!/usr/bin/python3
-
 import argparse
-import base64
-import json
-import os
 import re
-import sys
 import urllib.request
-
 from html.parser import HTMLParser
 
 
@@ -43,8 +37,8 @@ def check_pr_title(pr_number: int):
     # radically
     parser = GithubTitleParser()
     with urllib.request.urlopen(
-        "https://github.com/snapcore/snapd/pull/{}".format(pr_number)
-    ) as f:
+            "https://github.com/snapcore/snapd/pull/{}".format(
+                pr_number)) as f:
         parser.feed(f.read().decode("utf-8"))
     # the title has the format:
     #  "Added api endpoint for downloading snaps by glower · Pull Request #6958 · snapcore/snapd · GitHub"
@@ -63,9 +57,9 @@ def check_pr_title(pr_number: int):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "pr_number", metavar="PR number", help="the github PR number to check"
-    )
+    parser.add_argument("pr_number",
+                        metavar="PR number",
+                        help="the github PR number to check")
     args = parser.parse_args()
     try:
         check_pr_title(args.pr_number)
@@ -75,7 +69,7 @@ def main():
         print("module: short description")
         print("E.g.:")
         print("daemon: fix frobinator bug")
-        sys.exit(1)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ go_binaries = snap snapctl snap-seccomp snap-update-ns snap-exec snapd
 # NOTE: This *depends* on building out of tree. Some of the built binaries
 # conflict with directory names in the tree.
 .PHONY: all
-all: $(go_binaries) 
+all: $(go_binaries)
 
 snap snap-seccomp:
 	go build -buildmode=pie $(import_path)/cmd/$@
@@ -135,7 +135,7 @@ install:: | $(DESTDIR)$(snap_mount_dir)
 install::
 	install -m 755 -d $(DESTDIR)$(snap_mount_dir)/bin
 
-# Install misc directories: 
+# Install misc directories:
 install::
 	install -m 755 -d $(DESTDIR)$(localstatedir)/cache/snapd
 	install -m 755 -d $(DESTDIR)$(datadir)/polkit-1/actions
@@ -155,7 +155,7 @@ install::
 ifeq ($(with_core_bits),0)
 # Remove systemd units that are only used on core devices.
 install::
-	rm -f $(addprefix $(DESTDIR)$(unitdir)/,snapd.autoimport.service snapd.system-shutdown.service snapd.snap-repair.timer snapd.snap-repair.service snapd.core-fixup.service)
+	rm -f $(addprefix $(DESTDIR)$(unitdir)/,snapd.autoimport.service snapd.system-shutdown.service snapd.snap-repair.timer snapd.snap-repair.service snapd.core-fixup.service snapd.recovery-chooser-trigger.service)
 
 # Remove fixup script that is only used on core devices.
 install::
@@ -181,4 +181,4 @@ check:
 
 .PHONY: clean
 clean:
-	rm -f $(go_binaries) 
+	rm -f $(go_binaries)
