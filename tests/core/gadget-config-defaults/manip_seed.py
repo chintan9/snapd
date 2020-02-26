@@ -21,7 +21,7 @@ while i < len(snaps):
 # test-snapd-with-configure_123.snap -> test-snapd-configure
 snapname = path.basename(sys.argv[2]).split("_")[0]
 snaps.append(
-    {"name": snapname, "channel": "edge", "file": sys.argv[2], }
+    {"name": snapname, "channel": "edge", "file": sys.argv[2],}
 )
 
 with open(sys.argv[1], "w") as f:
