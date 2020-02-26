@@ -38,7 +38,8 @@ class GithubLabelsParser(HTMLParser):
             # inside labels
             # label entry has
             # <a class=".." data-name="<label name>" />
-            attr_data_name = [attr[1] for attr in attributes if attr[0] == "data-name"]
+            attr_data_name = [attr[1]
+                              for attr in attributes if attr[0] == "data-name"]
             if len(attr_data_name) == 0:
                 return
             data_name = attr_data_name[0]

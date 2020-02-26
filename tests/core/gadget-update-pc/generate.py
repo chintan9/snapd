@@ -13,7 +13,8 @@ def parse_arguments():
     parser.add_argument(
         "gadgetyaml", type=argparse.FileType("r"), help="path to gadget.yaml input file"
     )
-    parser.add_argument("variant", help="test data variant", choices=["v1", "v2"])
+    parser.add_argument("variant", help="test data variant",
+                        choices=["v1", "v2"])
     return parser.parse_args()
 
 
@@ -28,8 +29,10 @@ def make_v1(doc):
     # add new files to 'EFI System' partition, add new image file to 'BIOS
     # Boot', bump update edition for both
     structs = doc["volumes"]["pc"]["structure"]
-    efisystem = must_find_struct(structs, "EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
-    biosboot = must_find_struct(structs, "DA,21686148-6449-6E6F-744E-656564454649")
+    efisystem = must_find_struct(
+        structs, "EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
+    biosboot = must_find_struct(
+        structs, "DA,21686148-6449-6E6F-744E-656564454649")
 
     # - name: EFI System
     #   (not)type: EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -75,8 +78,10 @@ def make_v2(doc):
     doc = make_v1(doc)
 
     structs = doc["volumes"]["pc"]["structure"]
-    efisystem = must_find_struct(structs, "EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
-    biosboot = must_find_struct(structs, "DA,21686148-6449-6E6F-744E-656564454649")
+    efisystem = must_find_struct(
+        structs, "EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
+    biosboot = must_find_struct(
+        structs, "DA,21686148-6449-6E6F-744E-656564454649")
     # - name: EFI System
     #   (not)type: EF,C12A7328-F81F-11D2-BA4B-00A0C93EC93B
     #   filesystem: vfat
