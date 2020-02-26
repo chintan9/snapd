@@ -35,23 +35,20 @@
 
 static const char *freezer_cgroup_dir = "/sys/fs/cgroup/freezer";
 
-void sc_cgroup_freezer_join(const char *snap_name, pid_t pid)
-{
-    char buf[PATH_MAX] = { 0 };
+void sc_cgroup_freezer_join(const char *snap_name, pid_t pid) {
+    char buf[PATH_MAX] = {0};
     sc_must_snprintf(buf, sizeof buf, "snap.%s", snap_name);
     sc_cgroup_create_and_join(freezer_cgroup_dir, buf, pid);
 }
 
-bool sc_cgroup_freezer_occupied(const char *snap_name)
-{
+bool sc_cgroup_freezer_occupied(const char *snap_name) {
     // Format the name of the cgroup hierarchy.
-    char buf[PATH_MAX] = { 0 };
+    char buf[PATH_MAX] = {0};
     sc_must_snprintf(buf, sizeof buf, "snap.%s", snap_name);
 
     // Open the freezer cgroup directory.
     int cgroup_fd SC_CLEANUP(sc_cleanup_close) = -1;
-    cgroup_fd = open(freezer_cgroup_dir,
-                     O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    cgroup_fd = open(freezer_cgroup_dir, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (cgroup_fd < 0) {
         die("cannot open freezer cgroup (%s)", freezer_cgroup_dir);
     }
@@ -63,20 +60,17 @@ bool sc_cgroup_freezer_occupied(const char *snap_name)
     }
     // Open the hierarchy directory for the given snap.
     int hierarchy_fd SC_CLEANUP(sc_cleanup_close) = -1;
-    hierarchy_fd = openat(cgroup_fd, buf,
-                          O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    hierarchy_fd = openat(cgroup_fd, buf, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (hierarchy_fd < 0) {
         if (errno == ENOENT) {
             return false;
         }
-        die("cannot open freezer cgroup hierarchy for snap %s",
-            snap_name);
+        die("cannot open freezer cgroup hierarchy for snap %s", snap_name);
     }
     // Open the "cgroup.procs" file. Alternatively we could open the "tasks"
     // file and see per-thread data but we don't need that.
     int cgroup_procs_fd SC_CLEANUP(sc_cleanup_close) = -1;
-    cgroup_procs_fd = openat(hierarchy_fd, "cgroup.procs",
-                             O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    cgroup_procs_fd = openat(hierarchy_fd, "cgroup.procs", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (cgroup_procs_fd < 0) {
         die("cannot open cgroup.procs file for freezer cgroup hierarchy for snap %s", snap_name);
     }
@@ -86,7 +80,7 @@ bool sc_cgroup_freezer_occupied(const char *snap_name)
     if (cgroup_procs == NULL) {
         die("cannot convert cgroups.procs file descriptor to FILE");
     }
-    cgroup_procs_fd = -1;	// cgroup_procs_fd will now be closed by fclose.
+    cgroup_procs_fd = -1;  // cgroup_procs_fd will now be closed by fclose.
 
     char *line_buf SC_CLEANUP(sc_cleanup_string) = NULL;
     size_t line_buf_size = 0;
@@ -95,8 +89,7 @@ bool sc_cgroup_freezer_occupied(const char *snap_name)
     for (;;) {
         num_read = getline(&line_buf, &line_buf_size, cgroup_procs);
         if (num_read < 0 && errno != 0) {
-            die("cannot read next PID belonging to snap %s",
-                snap_name);
+            die("cannot read next PID belonging to snap %s", snap_name);
         }
         if (num_read <= 0) {
             break;
@@ -109,15 +102,13 @@ bool sc_cgroup_freezer_occupied(const char *snap_name)
         }
         debug("found process id: %s\n", line_buf);
 
-        if (fstatat(proc_fd, line_buf, &statbuf, AT_SYMLINK_NOFOLLOW) <
-                0) {
+        if (fstatat(proc_fd, line_buf, &statbuf, AT_SYMLINK_NOFOLLOW) < 0) {
             // The process may have died already.
             if (errno != ENOENT) {
                 die("cannot stat /proc/%s", line_buf);
             }
         }
-        debug("found process %s belonging to user %d",
-              line_buf, statbuf.st_uid);
+        debug("found process %s belonging to user %d", line_buf, statbuf.st_uid);
         return true;
     }
 

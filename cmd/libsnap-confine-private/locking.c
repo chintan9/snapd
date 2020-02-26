@@ -19,8 +19,6 @@
 #include "config.h"
 #endif
 
-#include "locking.h"
-
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -33,6 +31,7 @@
 #include "../libsnap-confine-private/cleanup-funcs.h"
 #include "../libsnap-confine-private/string-utils.h"
 #include "../libsnap-confine-private/utils.h"
+#include "locking.h"
 
 // SANITY_TIMEOUT is the timeout in seconds that is used when
 // "sc_enable_sanity_timeout()" is called
@@ -46,15 +45,11 @@ static volatile sig_atomic_t sanity_timeout_expired = 0;
 /**
  * Signal handler for SIGALRM that sets sanity_timeout_expired flag to 1.
  **/
-static void sc_SIGALRM_handler(int signum)
-{
-    sanity_timeout_expired = 1;
-}
+static void sc_SIGALRM_handler(int signum) { sanity_timeout_expired = 1; }
 
-void sc_enable_sanity_timeout(void)
-{
+void sc_enable_sanity_timeout(void) {
     sanity_timeout_expired = 0;
-    struct sigaction act = {.sa_handler = sc_SIGALRM_handler };
+    struct sigaction act = {.sa_handler = sc_SIGALRM_handler};
     if (sigemptyset(&act.sa_mask) < 0) {
         die("cannot initialize POSIX signal set");
     }
@@ -66,17 +61,15 @@ void sc_enable_sanity_timeout(void)
         die("cannot install signal handler for SIGALRM");
     }
     alarm(SANITY_TIMEOUT);
-    debug("sanity timeout initialized and set for %i seconds",
-          SANITY_TIMEOUT);
+    debug("sanity timeout initialized and set for %i seconds", SANITY_TIMEOUT);
 }
 
-void sc_disable_sanity_timeout(void)
-{
+void sc_disable_sanity_timeout(void) {
     if (sanity_timeout_expired) {
         die("sanity timeout expired");
     }
     alarm(0);
-    struct sigaction act = {.sa_handler = SIG_DFL };
+    struct sigaction act = {.sa_handler = SIG_DFL};
     if (sigemptyset(&act.sa_mask) < 0) {
         die("cannot initialize POSIX signal set");
     }
@@ -90,8 +83,7 @@ void sc_disable_sanity_timeout(void)
 
 static const char *sc_lock_dir = SC_LOCK_DIR;
 
-static int get_lock_directory(void)
-{
+static int get_lock_directory(void) {
     // Create (if required) and open the lock directory.
     debug("creating lock directory %s (if missing)", sc_lock_dir);
     sc_identity old = sc_set_effective_identity(sc_root_group_identity());
@@ -99,8 +91,7 @@ static int get_lock_directory(void)
         die("cannot create lock directory %s", sc_lock_dir);
     }
     debug("opening lock directory %s", sc_lock_dir);
-    int dir_fd =
-        open(sc_lock_dir, O_DIRECTORY | O_PATH | O_CLOEXEC | O_NOFOLLOW);
+    int dir_fd = open(sc_lock_dir, O_DIRECTORY | O_PATH | O_CLOEXEC | O_NOFOLLOW);
     (void)sc_set_effective_identity(old);
     if (dir_fd < 0) {
         die("cannot open lock directory");
@@ -108,24 +99,20 @@ static int get_lock_directory(void)
     return dir_fd;
 }
 
-static void get_lock_name(char *lock_fname, size_t size, const char *scope,
-                          uid_t uid)
-{
+static void get_lock_name(char *lock_fname, size_t size, const char *scope, uid_t uid) {
     if (uid == 0) {
         // The root user doesn't have a per-user mount namespace.
         // Doing so would be confusing for services which use $SNAP_DATA
         // as home, and not in $SNAP_USER_DATA.
-        sc_must_snprintf(lock_fname, size, "%s.lock", scope ? : "");
+        sc_must_snprintf(lock_fname, size, "%s.lock", scope ?: "");
     } else {
-        sc_must_snprintf(lock_fname, size, "%s.%d.lock",
-                         scope ? : "", uid);
+        sc_must_snprintf(lock_fname, size, "%s.%d.lock", scope ?: "", uid);
     }
 }
 
-static int open_lock(const char *scope, uid_t uid)
-{
+static int open_lock(const char *scope, uid_t uid) {
     int dir_fd SC_CLEANUP(sc_cleanup_close) = -1;
-    char lock_fname[PATH_MAX] = { 0 };
+    char lock_fname[PATH_MAX] = {0};
     int lock_fd;
 
     dir_fd = get_lock_directory();
@@ -134,8 +121,7 @@ static int open_lock(const char *scope, uid_t uid)
     // Open the lock file and acquire an exclusive lock.
     debug("opening lock file: %s/%s", sc_lock_dir, lock_fname);
     sc_identity old = sc_set_effective_identity(sc_root_group_identity());
-    lock_fd = openat(dir_fd, lock_fname,
-                     O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    lock_fd = openat(dir_fd, lock_fname, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
     (void)sc_set_effective_identity(old);
     if (lock_fd < 0) {
         die("cannot open lock file: %s/%s", sc_lock_dir, lock_fname);
@@ -143,40 +129,29 @@ static int open_lock(const char *scope, uid_t uid)
     return lock_fd;
 }
 
-static int sc_lock_generic(const char *scope, uid_t uid)
-{
+static int sc_lock_generic(const char *scope, uid_t uid) {
     int lock_fd = open_lock(scope, uid);
     sc_enable_sanity_timeout();
-    debug("acquiring exclusive lock (scope %s, uid %d)",
-          scope ? : "(global)", uid);
+    debug("acquiring exclusive lock (scope %s, uid %d)", scope ?: "(global)", uid);
     if (flock(lock_fd, LOCK_EX) < 0) {
         sc_disable_sanity_timeout();
         close(lock_fd);
-        die("cannot acquire exclusive lock (scope %s, uid %d)",
-            scope ? : "(global)", uid);
+        die("cannot acquire exclusive lock (scope %s, uid %d)", scope ?: "(global)", uid);
     } else {
         sc_disable_sanity_timeout();
     }
     return lock_fd;
 }
 
-int sc_lock_global(void)
-{
-    return sc_lock_generic(NULL, 0);
-}
+int sc_lock_global(void) { return sc_lock_generic(NULL, 0); }
 
-int sc_lock_snap(const char *snap_name)
-{
-    return sc_lock_generic(snap_name, 0);
-}
+int sc_lock_snap(const char *snap_name) { return sc_lock_generic(snap_name, 0); }
 
-void sc_verify_snap_lock(const char *snap_name)
-{
+void sc_verify_snap_lock(const char *snap_name) {
     int lock_fd, retval;
 
     lock_fd = open_lock(snap_name, 0);
-    debug("trying to verify whether exclusive lock over snap %s is held",
-          snap_name);
+    debug("trying to verify whether exclusive lock over snap %s is held", snap_name);
     retval = flock(lock_fd, LOCK_EX | LOCK_NB);
     if (retval == 0) {
         /* We managed to grab the lock, the lock was not held! */
@@ -192,13 +167,9 @@ void sc_verify_snap_lock(const char *snap_name)
      * Good, this is what we expected. */
 }
 
-int sc_lock_snap_user(const char *snap_name, uid_t uid)
-{
-    return sc_lock_generic(snap_name, uid);
-}
+int sc_lock_snap_user(const char *snap_name, uid_t uid) { return sc_lock_generic(snap_name, uid); }
 
-void sc_unlock(int lock_fd)
-{
+void sc_unlock(int lock_fd) {
     // Release the lock and finish.
     debug("releasing lock %d", lock_fd);
     if (flock(lock_fd, LOCK_UN) < 0) {

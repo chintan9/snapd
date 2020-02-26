@@ -14,12 +14,13 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#include "config.h"
 #include "seccomp-support.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
@@ -28,14 +29,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <linux/filter.h>
-#include <linux/seccomp.h>
-
 #include "../libsnap-confine-private/cleanup-funcs.h"
 #include "../libsnap-confine-private/secure-getenv.h"
 #include "../libsnap-confine-private/string-utils.h"
 #include "../libsnap-confine-private/utils.h"
-
+#include "config.h"
 #include "seccomp-support-ext.h"
 
 static const char *filter_profile_dir = "/var/lib/snapd/seccomp/bpf/";
@@ -45,8 +43,7 @@ static const char *filter_profile_dir = "/var/lib/snapd/seccomp/bpf/";
 
 typedef struct sock_filter bpf_instr;
 
-static void validate_path_has_strict_perms(const char *path)
-{
+static void validate_path_has_strict_perms(const char *path) {
     struct stat stat_buf;
     if (stat(path, &stat_buf) < 0) {
         die("cannot stat %s", path);
@@ -54,8 +51,7 @@ static void validate_path_has_strict_perms(const char *path)
 
     errno = 0;
     if (stat_buf.st_uid != 0 || stat_buf.st_gid != 0) {
-        die("%s not root-owned %i:%i", path, stat_buf.st_uid,
-            stat_buf.st_gid);
+        die("%s not root-owned %i:%i", path, stat_buf.st_uid, stat_buf.st_gid);
     }
 
     if (stat_buf.st_mode & S_IWOTH) {
@@ -63,8 +59,7 @@ static void validate_path_has_strict_perms(const char *path)
     }
 }
 
-static void validate_bpfpath_is_safe(const char *path)
-{
+static void validate_bpfpath_is_safe(const char *path) {
     if (path == NULL || strlen(path) == 0 || path[0] != '/') {
         die("valid_bpfpath_is_safe needs an absolute path as input");
     }
@@ -94,14 +89,12 @@ static void validate_bpfpath_is_safe(const char *path)
     char *buf_token = strtok_r(tokenized, "/", &buf_saveptr);
     while (buf_token != NULL) {
         char *prev SC_CLEANUP(sc_cleanup_string) = NULL;
-        prev = sc_strdup(checked_path);	// needed by vsnprintf in sc_must_snprintf
+        prev = sc_strdup(checked_path);  // needed by vsnprintf in sc_must_snprintf
         // append '<buf_token>' if checked_path is '/', otherwise '/<buf_token>'
         if (strlen(checked_path) == 1) {
-            sc_must_snprintf(checked_path, checked_path_size,
-                             "%s%s", prev, buf_token);
+            sc_must_snprintf(checked_path, checked_path_size, "%s%s", prev, buf_token);
         } else {
-            sc_must_snprintf(checked_path, checked_path_size,
-                             "%s/%s", prev, buf_token);
+            sc_must_snprintf(checked_path, checked_path_size, "%s/%s", prev, buf_token);
         }
         validate_path_has_strict_perms(checked_path);
 
@@ -109,13 +102,11 @@ static void validate_bpfpath_is_safe(const char *path)
     }
 }
 
-bool sc_apply_seccomp_profile_for_security_tag(const char *security_tag)
-{
+bool sc_apply_seccomp_profile_for_security_tag(const char *security_tag) {
     debug("loading bpf program for security tag %s", security_tag);
 
-    char profile_path[PATH_MAX] = { 0 };
-    sc_must_snprintf(profile_path, sizeof(profile_path), "%s/%s.bin",
-                     filter_profile_dir, security_tag);
+    char profile_path[PATH_MAX] = {0};
+    sc_must_snprintf(profile_path, sizeof(profile_path), "%s/%s.bin", filter_profile_dir, security_tag);
 
     // Wait some time for the security profile to show up. When
     // the system boots snapd will created security profiles, but
@@ -128,8 +119,7 @@ bool sc_apply_seccomp_profile_for_security_tag(const char *security_tag)
         char *endptr = NULL;
         errno = 0;
         long env_max_wait = strtol(MAX_PROFILE_WAIT, &endptr, 10);
-        if (errno != 0 || MAX_PROFILE_WAIT == endptr || *endptr != '\0'
-                || env_max_wait <= 0) {
+        if (errno != 0 || MAX_PROFILE_WAIT == endptr || *endptr != '\0' || env_max_wait <= 0) {
             die("SNAP_CONFINE_MAX_PROFILE_WAIT invalid");
         }
         max_wait = env_max_wait > 0 ? env_max_wait : max_wait;
@@ -160,7 +150,7 @@ bool sc_apply_seccomp_profile_for_security_tag(const char *security_tag)
      * it can contain embedded NULs any earlier position). Note that
      * sc_read_seccomp_filter knows about the extra space and ensures that the
      * buffer is never empty. */
-    char bpf[MAX_BPF_SIZE + 1] = { 0 };
+    char bpf[MAX_BPF_SIZE + 1] = {0};
     size_t num_read = sc_read_seccomp_filter(profile_path, bpf, sizeof bpf);
     if (sc_streq(bpf, "@unrestricted\n")) {
         return false;
@@ -173,8 +163,7 @@ bool sc_apply_seccomp_profile_for_security_tag(const char *security_tag)
     return true;
 }
 
-void sc_apply_global_seccomp_profile(void)
-{
+void sc_apply_global_seccomp_profile(void) {
     const char *profile_path = "/var/lib/snapd/seccomp/bpf/global.bin";
     /* The profile may be absent. */
     if (access(profile_path, F_OK) != 0) {
@@ -183,7 +172,7 @@ void sc_apply_global_seccomp_profile(void)
     // TODO: move over to open/openat as an additional hardening measure.
     validate_bpfpath_is_safe(profile_path);
 
-    char bpf[MAX_BPF_SIZE + 1] = { 0 };
+    char bpf[MAX_BPF_SIZE + 1] = {0};
     size_t num_read = sc_read_seccomp_filter(profile_path, bpf, sizeof bpf);
     struct sock_fprog prog = {
         .len = num_read / sizeof(struct sock_filter),

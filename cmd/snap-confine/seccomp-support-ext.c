@@ -18,8 +18,6 @@
 #include "config.h"
 #endif
 
-#include "seccomp-support-ext.h"
-
 #include <errno.h>
 #include <linux/seccomp.h>
 #include <stdio.h>
@@ -29,6 +27,7 @@
 #include <unistd.h>
 
 #include "../libsnap-confine-private/utils.h"
+#include "seccomp-support-ext.h"
 
 #ifndef SECCOMP_FILTER_FLAG_LOG
 #define SECCOMP_FILTER_FLAG_LOG 2
@@ -82,12 +81,12 @@ void sc_apply_seccomp_filter(struct sock_fprog *prog) {
         /* The profile may fail to load using the "modern" interface.
          * In such case use the older prctl-based interface instead. */
         switch (errno) {
-        case ENOSYS:
-            debug("kernel doesn't support the seccomp(2) syscall");
-            break;
-        case EINVAL:
-            debug("kernel may not support the SECCOMP_FILTER_FLAG_LOG flag");
-            break;
+            case ENOSYS:
+                debug("kernel doesn't support the seccomp(2) syscall");
+                break;
+            case EINVAL:
+                debug("kernel may not support the SECCOMP_FILTER_FLAG_LOG flag");
+                break;
         }
         debug("falling back to prctl(2) syscall to load seccomp filter");
         err = prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, prog);
