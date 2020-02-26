@@ -21,13 +21,13 @@ reset_classic() {
 
     case "$SPREAD_SYSTEM" in
         ubuntu-*|debian-*)
-            sh -x "${SPREAD_PATH}/debian/snapd.prerm" remove
-            sh -x "${SPREAD_PATH}/debian/snapd.postrm" purge
+            sh -x "$SPREAD_PATH/debian/snapd.prerm" remove
+            sh -x "$SPREAD_PATH/debian/snapd.postrm" purge
             ;;
         fedora-*|opensuse-*|arch-*|amazon-*|centos-*)
             # We don't know if snap-mgmt was built, so call the *.in file
             # directly and pass arguments that will override the placeholders
-            sh -x "${SPREAD_PATH}/cmd/snap-mgmt/snap-mgmt.sh.in" \
+            sh -x "$SPREAD_PATH/cmd/snap-mgmt/snap-mgmt.sh.in" \
                 --snap-mount-dir="$SNAP_MOUNT_DIR" \
                 --purge
             # The script above doesn't remove the snapd directory as this
@@ -78,10 +78,10 @@ reset_classic() {
         # Restore snapd state and start systemd service units
         restore_snapd_state
         escaped_snap_mount_dir="$(systemd-escape --path "$SNAP_MOUNT_DIR")"
-        mounts="$(systemctl list-unit-files --full | grep "^${escaped_snap_mount_dir}[-.].*\\.mount" | cut -f1 -d ' ')"
-        services="$(systemctl list-unit-files --full | grep "^${escaped_snap_mount_dir}[-.].*\\.service" | cut -f1 -d ' ')"
+        mounts="$(systemctl list-unit-files --full | grep "^$escaped_snap_mount_dir[-.].*\\.mount" | cut -f1 -d ' ')"
+        services="$(systemctl list-unit-files --full | grep "^$escaped_snap_mount_dir[-.].*\\.service" | cut -f1 -d ' ')"
         systemctl daemon-reload # Workaround for http://paste.ubuntu.com/17735820/
-        for unit in $mounts $services; do
+        for unit in "$mounts" "$services"; do
             systemctl start "$unit"
         done
 
@@ -99,7 +99,7 @@ reset_classic() {
                 EXTRA_NC_ARGS=""
                 ;;
         esac
-        while ! printf 'GET / HTTP/1.0\r\n\r\n' | nc -U $EXTRA_NC_ARGS /run/snapd.socket; do sleep 0.5; done
+        while ! printf 'GET / HTTP/1.0\r\n\r\n' | nc -U "$EXTRA_NC_ARGS" /run/snapd.socket; do sleep 0.5; done
     fi
 }
 
@@ -124,7 +124,7 @@ reset_all_snap() {
             *)
                 # Check if a snap should be kept, there's a list of those in spread.yaml.
                 keep=0
-                for precious_snap in $SKIP_REMOVE_SNAPS; do
+                for precious_snap in "$SKIP_REMOVE_SNAPS"; do
                     if [ "$snap" = "$precious_snap" ]; then
                         keep=1
                         break
@@ -146,7 +146,7 @@ reset_all_snap() {
     done
     # remove all base/os snaps at the end
     if [ -n "$remove_bases" ]; then
-        for base in $remove_bases; do
+        for base in "$remove_bases"; do
             snap remove --purge "$base"
             if [ -d "$SNAP_MOUNT_DIR/$base" ]; then
                 echo "Error: removing base $base has unexpected leftover dir $SNAP_MOUNT_DIR/$base"

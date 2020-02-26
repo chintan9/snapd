@@ -12,7 +12,7 @@ wait_for_ssh(){
     retry=150
     while ! execute_remote true; do
         retry=$(( retry - 1 ))
-        if [ $retry -le 0 ]; then
+        if [ "$retry" -le 0 ]; then
             echo "Timed out waiting for ssh. Aborting!"
             return 1
         fi
@@ -24,7 +24,7 @@ wait_for_no_ssh(){
     retry=150
     while execute_remote true; do
         retry=$(( retry - 1 ))
-        if [ $retry -le 0 ]; then
+        if [ "$retry" -le 0 ]; then
             echo "Timed out waiting for no ssh. Aborting!"
             return 1
         fi
@@ -138,25 +138,25 @@ is_core_16_nested_system(){
 }
 
 refresh_to_new_core(){
-    local NEW_CHANNEL=$1
+    local NEW_CHANNEL="$1"
     if [ "$NEW_CHANNEL" = "" ]; then
         echo "Channel to refresh is not defined."
         exit 1
     else
         echo "Refreshing the core/snapd snap"
         if is_classic_nested_system; then
-            execute_remote "snap refresh core --${NEW_CHANNEL}"
-            execute_remote "snap info core" | grep -E "^tracking: +latest/${NEW_CHANNEL}"
+            execute_remote "snap refresh core --$NEW_CHANNEL"
+            execute_remote "snap info core" | grep -E "^tracking: +latest/$NEW_CHANNEL"
         fi
 
         if is_core_18_nested_system; then
-            execute_remote "snap refresh snapd --${NEW_CHANNEL}"
-            execute_remote "snap info snapd" | grep -E "^tracking: +latest/${NEW_CHANNEL}"
+            execute_remote "snap refresh snapd --$NEW_CHANNEL"
+            execute_remote "snap info snapd" | grep -E "^tracking: +latest/$NEW_CHANNEL"
         else
-            execute_remote "snap refresh core --${NEW_CHANNEL}"
+            execute_remote "snap refresh core --$NEW_CHANNEL"
             wait_for_no_ssh
             wait_for_ssh
-            execute_remote "snap info core" | grep -E "^tracking: +latest/${NEW_CHANNEL}"
+            execute_remote "snap info core" | grep -E "^tracking: +latest/$NEW_CHANNEL"
         fi
     fi
 }
@@ -173,8 +173,8 @@ create_nested_core_vm(){
 
         # create ubuntu-core image
         local EXTRA_SNAPS=""
-        if [ -d "${PWD}/extra-snaps" ] && [ "$(find "${PWD}/extra-snaps/" -type f -name "*.snap" | wc -l)" -gt 0 ]; then
-            EXTRA_SNAPS="--extra-snaps ${PWD}/extra-snaps/*.snap"
+        if [ -d "$PWD/extra-snaps" ] && [ "$(find "$PWD/extra-snaps/" -type f -name "*.snap" | wc -l)" -gt 0 ]; then
+            EXTRA_SNAPS="--extra-snaps $PWD/extra-snaps/*.snap"
         fi
 
         local NESTED_MODEL=""
@@ -208,7 +208,7 @@ start_nested_core_vm(){
     IMAGE="$WORK_DIR/image/ubuntu-core-new.img"
 
     cp -f "$WORK_DIR/image/ubuntu-core.img" "$IMAGE"
-    systemd_create_and_start_unit "$NESTED_VM" "${QEMU} -m 2048 -nographic \
+    systemd_create_and_start_unit "$NESTED_VM" "$QEMU -m 2048 -nographic \
         -net nic,model=virtio -net user,hostfwd=tcp::$SSH_PORT-:22 \
         -drive file=$IMAGE,cache=none,format=raw \
         -drive file=$WORK_DIR/assertions.disk,cache=none,format=raw \
@@ -244,7 +244,7 @@ EOF
 
 create_nested_classic_vm(){
     mkdir -p "$WORK_DIR/image"
-    IMAGE=$(ls $WORK_DIR/image/*.img || true)
+    IMAGE=$(ls "$WORK_DIR"/image/*.img || true)
     if [ -z "$IMAGE" ]; then
         # Get the cloud image
         local IMAGE_URL
@@ -252,7 +252,7 @@ create_nested_classic_vm(){
         wget -P "$WORK_DIR/image" "$IMAGE_URL"
         # Check the image
         local IMAGE
-        IMAGE=$(ls $WORK_DIR/image/*.img)
+        IMAGE=$(ls "$WORK_DIR"/image/*.img)
         test "$(echo "$IMAGE" | wc -l)" = "1"
 
         # Prepare the cloud-init configuration and configure image
@@ -262,15 +262,15 @@ create_nested_classic_vm(){
 }
 
 get_nested_classic_image_path() {
-    ls $WORK_DIR/image/*.img
+    ls "$WORK_DIR"/image/*.img
 }
 
 start_nested_classic_vm(){
     local IMAGE QEMU
-    IMAGE=$(ls $WORK_DIR/image/*.img)
+    IMAGE=$(ls "$WORK_DIR"/image/*.img)
     QEMU=$(get_qemu_for_nested_vm)
 
-    systemd_create_and_start_unit "$NESTED_VM" "${QEMU} -m 2048 -nographic \
+    systemd_create_and_start_unit "$NESTED_VM" "$QEMU -m 2048 -nographic \
         -net nic,model=virtio -net user,hostfwd=tcp::$SSH_PORT-:22 \
         -drive file=$IMAGE,if=virtio \
         -drive file=$WORK_DIR/seed.img,if=virtio \
@@ -292,35 +292,35 @@ copy_remote(){
 }
 
 add_tty_chardev(){
-    local CHARDEV_ID=$1
-    local CHARDEV_PATH=$2
+    local CHARDEV_ID="$1"
+    local CHARDEV_PATH="$2"
     echo "chardev-add file,path=$CHARDEV_PATH,id=$CHARDEV_ID" | nc -q 0 127.0.0.1 "$MON_PORT"
     echo "chardev added"
 }
 
 remove_chardev(){
-    local CHARDEV_ID=$1
+    local CHARDEV_ID="$1"
     echo "chardev-remove $CHARDEV_ID" | nc -q 0 127.0.0.1 "$MON_PORT"
     echo "chardev added"
 }
 
 add_usb_serial_device(){
-    local DEVICE_ID=$1
-    local CHARDEV_ID=$2
-    local SERIAL_NUM=$3
+    local DEVICE_ID="$1"
+    local CHARDEV_ID="$2"
+    local SERIAL_NUM="$3"
     echo "device_add usb-serial,chardev=$CHARDEV_ID,id=$DEVICE_ID,serial=$SERIAL_NUM" | nc -q 0 127.0.0.1 "$MON_PORT"
     echo "device added"
 }
 
 del_device(){
-    local DEVICE_ID=$1
+    local DEVICE_ID="$1"
     echo "device_del $DEVICE_ID" | nc -q 0 127.0.0.1 "$MON_PORT"
     echo "device deleted"
 }
 
 get_nested_core_revision_for_channel(){
-    local CHANNEL=$1
-    execute_remote "snap info core" | awk "/${CHANNEL}: / {print(\$4)}" | sed -e 's/(\(.*\))/\1/'
+    local CHANNEL="$1"
+    execute_remote "snap info core" | awk "/$CHANNEL: / {print(\$4)}" | sed -e 's/(\(.*\))/\1/'
 }
 
 get_nested_core_revision_installed(){

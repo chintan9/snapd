@@ -6,8 +6,8 @@
 # XXX: cannot be used in prepare: section of the tests
 # as the test gets stuck around qemu-nbd on 20.04.
 mount_ubuntu_image() {
-    local CLOUD_IMAGE=$1
-    local IMAGE_MOUNTPOINT=$2
+    local CLOUD_IMAGE="$1"
+    local IMAGE_MOUNTPOINT="$2"
 
     if ! lsmod | grep nbd; then
         modprobe nbd
@@ -23,7 +23,7 @@ mount_ubuntu_image() {
 }
 
 umount_ubuntu_image() {
-    local IMAGE_MOUNTPOINT=$1
+    local IMAGE_MOUNTPOINT="$1"
 
     for fs in proc dev sys/kernel/security sys; do
         umount "$IMAGE_MOUNTPOINT/$fs"
@@ -41,7 +41,7 @@ umount_ubuntu_image() {
 # this will go away once snapd on the core is new enough to support
 # pre-seeding.
 setup_preseeding() {
-    local IMAGE_MOUNTPOINT=$1
+    local IMAGE_MOUNTPOINT="$1"
     local CORE_IMAGE
 
     CORE_IMAGE=$(find "$IMAGE_MOUNTPOINT/var/lib/snapd/seed/snaps/" -name "core_*.snap")

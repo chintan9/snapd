@@ -157,7 +157,7 @@ distro_install_local_package() {
                 ;;
             *)
                 break
-        esac
+        ;; esac
     done
 
     case "$SPREAD_SYSTEM" in
@@ -172,7 +172,7 @@ distro_install_local_package() {
                 flags="$flags --allow-downgrades"
             fi
             # shellcheck disable=SC2086
-            apt install $flags "$@"
+            apt install "$flags" "$@"
             ;;
         fedora-*)
             quiet dnf -y install --setopt=install_weak_deps=False "$@"
@@ -252,7 +252,7 @@ distro_install_package() {
     esac
 
     # shellcheck disable=SC2207
-    pkg_names=($(
+    pkg_names=("$(
         for pkg in "$@" ; do
             package_name=$(distro_name_package "$pkg")
             # When we could not find a different package name for the distribution
@@ -262,20 +262,20 @@ distro_install_package() {
             fi
             echo "$package_name"
         done
-    ))
+    )")
 
     case "$SPREAD_SYSTEM" in
         ubuntu-*|debian-*)
             # shellcheck disable=SC2086
-            quiet eatmydata apt-get install $APT_FLAGS -y "${pkg_names[@]}"
+            quiet eatmydata apt-get install "$APT_FLAGS" -y "${pkg_names[@]}"
             ;;
         fedora-*)
             # shellcheck disable=SC2086
-            quiet dnf -y --refresh install $DNF_FLAGS "${pkg_names[@]}"
+            quiet dnf -y --refresh install "$DNF_FLAGS" "${pkg_names[@]}"
             ;;
         amazon-*|centos-*)
             # shellcheck disable=SC2086
-            quiet yum -y install $YUM_FLAGS "${pkg_names[@]}"
+            quiet yum -y install "$YUM_FLAGS" "${pkg_names[@]}"
             ;;
         opensuse-*)
             # packages may be downgraded in the repositories, which would be
@@ -287,7 +287,7 @@ distro_install_package() {
             # --allow-downgrade will make the installation proceed
 
             # shellcheck disable=SC2086
-            quiet zypper install -y --allow-downgrade --force-resolution $ZYPPER_FLAGS "${pkg_names[@]}"
+            quiet zypper install -y --allow-downgrade --force-resolution "$ZYPPER_FLAGS" "${pkg_names[@]}"
             ;;
         arch-*)
             # shellcheck disable=SC2086
@@ -303,7 +303,7 @@ distro_install_package() {
 
 distro_purge_package() {
     # shellcheck disable=SC2046
-    set -- $(
+    set -- "$(
         for pkg in "$@" ; do
             package_name=$(distro_name_package "$pkg")
             # When we could not find a different package name for the distribution
@@ -313,7 +313,7 @@ distro_purge_package() {
             fi
             echo "$package_name"
         done
-        )
+        )"
 
     case "$SPREAD_SYSTEM" in
         ubuntu-*|debian-*)
@@ -465,19 +465,19 @@ distro_install_build_snapd(){
         case "$SPREAD_SYSTEM" in
             ubuntu-*|debian-*)
                 # shellcheck disable=SC2125
-                packages="${GOHOME}"/snapd_*.deb
+                packages="$GOHOME"/snapd_*.deb
                 ;;
             fedora-*|amazon-*|centos-*)
                 # shellcheck disable=SC2125
-                packages="${GOHOME}"/snap-confine*.rpm\ "${GOPATH%%:*}"/snapd*.rpm
+                packages="$GOHOME"/snap-confine*.rpm\ "${GOPATH%%:*}"/snapd*.rpm
                 ;;
             opensuse-*)
                 # shellcheck disable=SC2125
-                packages="${GOHOME}"/snapd*.rpm
+                packages="$GOHOME"/snapd*.rpm
                 ;;
             arch-*)
                 # shellcheck disable=SC2125
-                packages="${GOHOME}"/snapd*.pkg.tar.xz
+                packages="$GOHOME"/snapd*.pkg.tar.xz
                 ;;
             *)
                 exit 1
@@ -485,13 +485,13 @@ distro_install_build_snapd(){
         esac
 
         # shellcheck disable=SC2086
-        distro_install_local_package $packages
+        distro_install_local_package "$packages"
 
         case "$SPREAD_SYSTEM" in
             fedora-*|centos-*)
                 # We need to wait until the man db cache is updated before do daemon-reexec
                 # Otherwise the service fails and the system will be degraded during tests executions
-                for i in $(seq 20); do
+                for i in "$(seq 20)"; do
                     if ! systemctl is-active run-*.service; then
                         break
                     fi
@@ -839,7 +839,7 @@ pkg_dependencies(){
 install_pkg_dependencies(){
     pkgs=$(pkg_dependencies)
     # shellcheck disable=SC2086
-    distro_install_package $pkgs
+    distro_install_package "$pkgs"
 }
 
 # upgrade distribution and indicate if reboot is needed by outputting 'reboot'
