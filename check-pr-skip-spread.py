@@ -36,7 +36,9 @@ class GithubLabelsParser(HTMLParser):
             # inside labels
             # label entry has
             # <a class=".." data-name="<label name>" />
-            attr_data_name = [attr[1] for attr in attributes if attr[0] == "data-name"]
+            attr_data_name = [
+                attr[1] for attr in attributes if attr[0] == "data-name"
+            ]
             if len(attr_data_name) == 0:
                 return
             data_name = attr_data_name[0]
@@ -65,20 +67,21 @@ def grab_pr_labels(pr_number: int):
     # radically
     parser = GithubLabelsParser()
     with urllib.request.urlopen(
-        "https://github.com/snapcore/snapd/pull/{}".format(pr_number)
-    ) as f:
+            "https://github.com/snapcore/snapd/pull/{}".format(
+                pr_number)) as f:
         parser.feed(f.read().decode("utf-8"))
     return parser.labels
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "pr_number", metavar="PR number", help="the github PR number to check"
-    )
-    parser.add_argument(
-        "-d", "--debug", help="enable debug logging", action="store_true"
-    )
+    parser.add_argument("pr_number",
+                        metavar="PR number",
+                        help="the github PR number to check")
+    parser.add_argument("-d",
+                        "--debug",
+                        help="enable debug logging",
+                        action="store_true")
     args = parser.parse_args()
 
     lvl = logging.INFO

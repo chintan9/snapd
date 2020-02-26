@@ -37,8 +37,8 @@ def check_pr_title(pr_number: int):
     # radically
     parser = GithubTitleParser()
     with urllib.request.urlopen(
-        "https://github.com/snapcore/snapd/pull/{}".format(pr_number)
-    ) as f:
+            "https://github.com/snapcore/snapd/pull/{}".format(
+                pr_number)) as f:
         parser.feed(f.read().decode("utf-8"))
     # the title has the format:
     #  "Added api endpoint for downloading snaps by glower · Pull Request #6958 · snapcore/snapd · GitHub"
@@ -57,9 +57,9 @@ def check_pr_title(pr_number: int):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "pr_number", metavar="PR number", help="the github PR number to check"
-    )
+    parser.add_argument("pr_number",
+                        metavar="PR number",
+                        help="the github PR number to check")
     args = parser.parse_args()
     try:
         check_pr_title(args.pr_number)
