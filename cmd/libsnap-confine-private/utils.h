@@ -21,7 +21,7 @@
 #include <stdbool.h>
 
 __attribute__((noreturn))
-    __attribute__((format(printf, 1, 2)))
+__attribute__((format(printf, 1, 2)))
 void die(const char *fmt, ...);
 
 __attribute__((format(printf, 1, 2)))
@@ -46,10 +46,10 @@ bool sc_is_reexec_enabled(void);
  * change_uid and change_gid flags.
 **/
 typedef struct sc_identity {
-	uid_t uid;
-	gid_t gid;
-	unsigned change_uid:1;
-	unsigned change_gid:1;
+    uid_t uid;
+    gid_t gid;
+    unsigned change_uid:1;
+    unsigned change_gid:1;
 } sc_identity;
 
 /**
@@ -61,14 +61,14 @@ typedef struct sc_identity {
  **/
 static inline sc_identity sc_root_group_identity(void)
 {
-	sc_identity id = {
-		/* Explicitly set our intent of changing just the GID.
-		 * Refactoring of this code must retain this property. */
-		.change_uid = 0,
-		.change_gid = 1,
-		.gid = 0,
-	};
-	return id;
+    sc_identity id = {
+        /* Explicitly set our intent of changing just the GID.
+         * Refactoring of this code must retain this property. */
+        .change_uid = 0,
+        .change_gid = 1,
+        .gid = 0,
+    };
+    return id;
 }
 
 /**
