@@ -33,6 +33,7 @@ import (
 	"github.com/snapcore/snapd/overlord/configstate/config"
 	"github.com/snapcore/snapd/overlord/configstate/configcore"
 	"github.com/snapcore/snapd/overlord/servicestate"
+	"github.com/snapcore/snapd/overlord/servicestate/servicestatetest"
 	"github.com/snapcore/snapd/overlord/snapstate"
 	"github.com/snapcore/snapd/overlord/snapstate/snapstatetest"
 	"github.com/snapcore/snapd/snap"
@@ -67,7 +68,7 @@ func (s *vitalitySuite) SetUpTest(c *C) {
 }
 
 func (s *vitalitySuite) TestConfigureVitalityUnhappyName(c *C) {
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "-invalid-snap-name!yf",
@@ -77,7 +78,7 @@ func (s *vitalitySuite) TestConfigureVitalityUnhappyName(c *C) {
 }
 
 func (s *vitalitySuite) TestConfigureVitalityNoSnapd(c *C) {
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "snapd",
@@ -87,7 +88,7 @@ func (s *vitalitySuite) TestConfigureVitalityNoSnapd(c *C) {
 }
 
 func (s *vitalitySuite) TestConfigureVitalityhappyName(c *C) {
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "valid-snapname",
@@ -138,7 +139,7 @@ func (s *vitalitySuite) testConfigureVitalityWithValidSnap(c *C, uc18 bool) {
 	})
 	s.state.Unlock()
 
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "unrelated,test-snap",
@@ -191,15 +192,12 @@ func (s *vitalitySuite) TestConfigureVitalityWithQuotaGroup(c *C) {
 	tr.Commit()
 
 	// make a new quota group with this snap in it
-	err := servicestate.CreateQuota(s.state, "foogroup", "", []string{"test-snap"}, quantity.SizeMiB)
+	err := servicestatetest.MockQuotaInState(s.state, "foogroup", "", []string{"test-snap"}, quantity.SizeMiB)
 	c.Assert(err, IsNil)
-
-	// CreateQuota uses systemctl, but we don't care about that here
-	s.systemctlArgs = nil
 
 	s.state.Unlock()
 
-	err = configcore.Run(&mockConf{
+	err = configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "unrelated,test-snap",
@@ -224,7 +222,7 @@ func (s *vitalitySuite) TestConfigureVitalityHintTooMany(c *C) {
 		l[i] = strconv.Itoa(i)
 	}
 	manyStr := strings.Join(l, ",")
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": manyStr,
@@ -248,7 +246,7 @@ func (s *vitalitySuite) TestConfigureVitalityManySnaps(c *C) {
 	}
 
 	// snap1,snap2,snap3
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "snap1,snap2,snap3",
@@ -279,7 +277,7 @@ func (s *vitalitySuite) TestConfigureVitalityManySnapsDelta(c *C) {
 	}
 
 	// snap1,snap2,snap3 switch to snap3,snap1
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		conf: map[string]interface{}{
 			"resilience.vitality-hint": "snap1,snap2,snap3",
@@ -314,7 +312,7 @@ func (s *vitalitySuite) TestConfigureVitalityManySnapsOneRemovedOneUnchanged(c *
 	}
 
 	// first run generates the snap1,snap2 configs
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "snap1,snap2",
@@ -330,7 +328,7 @@ func (s *vitalitySuite) TestConfigureVitalityManySnapsOneRemovedOneUnchanged(c *
 	s.systemctlArgs = nil
 
 	// now we change the configuration and set snap1,snap3
-	err = configcore.Run(&mockConf{
+	err = configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		conf: map[string]interface{}{
 			"resilience.vitality-hint": "snap1,snap2",
@@ -370,7 +368,7 @@ func (s *vitalitySuite) TestConfigureVitalityNotActiveSnap(c *C) {
 	})
 	s.state.Unlock()
 
-	err := configcore.Run(&mockConf{
+	err := configcore.Run(classicDev, &mockConf{
 		state: s.state,
 		changes: map[string]interface{}{
 			"resilience.vitality-hint": "unrelated,test-snap",
