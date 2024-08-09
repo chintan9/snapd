@@ -59,8 +59,8 @@ create_test_user(){
     echo >> /etc/sudoers
     echo 'test ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
-    chown test.test -R "$SPREAD_PATH"
-    chown test.test "$SPREAD_PATH/../"
+    chown test:test -R "$SPREAD_PATH"
+    chown test:test "$SPREAD_PATH/../"
 }
 
 build_deb(){
@@ -288,7 +288,7 @@ prepare_project() {
     # declare the "quiet" wrapper
 
     if [ "$SPREAD_BACKEND" = "external" ]; then
-        chown test.test -R "$PROJECT_PATH"
+        chown test:test -R "$PROJECT_PATH"
         exit 0
     fi
 
@@ -300,7 +300,7 @@ prepare_project() {
         fi
         echo test:ubuntu | sudo chpasswd
         echo 'test ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/create-user-test
-        chown test.test -R "$PROJECT_PATH"
+        chown test:test -R "$PROJECT_PATH"
         exit 0
     fi
 
@@ -383,7 +383,7 @@ prepare_project() {
         rm -rf vendor/*/
 
         # and create a fake upstream tarball
-        tar -c -z -f ../snapd_"$(dpkg-parsechangelog --show-field Version|cut -d- -f1)".orig.tar.gz --exclude=./debian --exclude=./.git .
+        tar -c -z -f ../snapd_"$(dpkg-parsechangelog --show-field Version|cut -d- -f1)".orig.tar.gz --exclude=./debian --exclude=./.git --exclude='*.pyc' .
 
         # and build a source package - this will be used during the sbuild test
         dpkg-buildpackage -S -uc -us
@@ -559,22 +559,12 @@ prepare_project() {
     esac
 
     # Retry go mod vendor to minimize the number of connection errors during the sync
-    for _ in $(seq 10); do
-        if go mod vendor; then
-            break
-        fi
-        sleep 1
-    done
+    retry -n 10 go mod vendor
     # Update C dependencies
-    for _ in $(seq 10); do
-        if (cd c-vendor && ./vendor.sh); then
-            break
-        fi
-        sleep 1
-    done
+    ( cd c-vendor && retry -n 10 ./vendor.sh )
 
     # go mod runs as root and will leave strange permissions
-    chown test.test -R "$SPREAD_PATH"
+    chown test:test -R "$SPREAD_PATH"
 
     if [ "$BUILD_SNAPD_FROM_CURRENT" = true ]; then
         case "$SPREAD_SYSTEM" in

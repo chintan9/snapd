@@ -139,11 +139,27 @@ func MockAssertstateTryEnforceValidationSets(f func(st *state.State, validationS
 	return r
 }
 
-func MockSnapstateInstall(mock func(context.Context, *state.State, string, *snapstate.RevisionOptions, int, snapstate.Flags) (*state.TaskSet, error)) (restore func()) {
-	oldSnapstateInstall := snapstateInstall
-	snapstateInstall = mock
+func MockSnapstateInstallWithGoal(mock func(ctx context.Context, st *state.State, goal snapstate.InstallGoal, opts snapstate.Options) ([]*snap.Info, []*state.TaskSet, error)) (restore func()) {
+	old := snapstateInstallWithGoal
+	snapstateInstallWithGoal = mock
 	return func() {
-		snapstateInstall = oldSnapstateInstall
+		snapstateInstallWithGoal = old
+	}
+}
+
+func MockSnapstateInstallComponents(mock func(ctx context.Context, st *state.State, names []string, info *snap.Info, opts snapstate.Options) ([]*state.TaskSet, error)) (restore func()) {
+	old := snapstateInstallComponents
+	snapstateInstallComponents = mock
+	return func() {
+		snapstateInstallComponents = old
+	}
+}
+
+func MockSnapstateStoreInstallGoal(mock func(snaps ...snapstate.StoreSnap) snapstate.InstallGoal) (restore func()) {
+	old := snapstateStoreInstallGoal
+	snapstateStoreInstallGoal = mock
+	return func() {
+		snapstateStoreInstallGoal = old
 	}
 }
 
@@ -195,19 +211,19 @@ func MockSnapstateRevertToRevision(mock func(*state.State, string, snap.Revision
 	}
 }
 
-func MockSnapstateInstallMany(mock func(*state.State, []string, []*snapstate.RevisionOptions, int, *snapstate.Flags) ([]string, []*state.TaskSet, error)) (restore func()) {
-	oldSnapstateInstallMany := snapstateInstallMany
-	snapstateInstallMany = mock
-	return func() {
-		snapstateInstallMany = oldSnapstateInstallMany
-	}
-}
-
 func MockSnapstateUpdateMany(mock func(context.Context, *state.State, []string, []*snapstate.RevisionOptions, int, *snapstate.Flags) ([]string, []*state.TaskSet, error)) (restore func()) {
 	oldSnapstateUpdateMany := snapstateUpdateMany
 	snapstateUpdateMany = mock
 	return func() {
 		snapstateUpdateMany = oldSnapstateUpdateMany
+	}
+}
+
+func MockSnapstateRemove(mock func(st *state.State, name string, revision snap.Revision, flags *snapstate.RemoveFlags) (*state.TaskSet, error)) (restore func()) {
+	oldSnapstateRemove := snapstateRemove
+	snapstateRemove = mock
+	return func() {
+		snapstateRemove = oldSnapstateRemove
 	}
 }
 
@@ -264,6 +280,14 @@ func MockSnapstateHoldRefreshesBySystem(f func(st *state.State, level snapstate.
 	snapstateHoldRefreshesBySystem = f
 	return func() {
 		snapstateHoldRefreshesBySystem = old
+	}
+}
+
+func MockSnapstateRemoveComponents(mock func(st *state.State, snapName string, compName []string, opts snapstate.RemoveComponentsOpts) ([]*state.TaskSet, error)) (restore func()) {
+	oldSnapstateRemoveComponents := snapstateRemoveComponents
+	snapstateRemoveComponents = mock
+	return func() {
+		snapstateRemoveComponents = oldSnapstateRemoveComponents
 	}
 }
 

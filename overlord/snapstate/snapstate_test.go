@@ -184,6 +184,8 @@ func (s *snapmgrBaseTest) SetUpTest(c *C) {
 
 	oldSetupInstallHook := snapstate.SetupInstallHook
 	oldSetupInstallComponentHook := snapstate.SetupInstallComponentHook
+	oldSetupPostRefreshComponentHook := snapstate.SetupPostRefreshComponentHook
+	oldSetupPreRefreshComponentHook := snapstate.SetupPreRefreshComponentHook
 	oldSetupPreRefreshHook := snapstate.SetupPreRefreshHook
 	oldSetupPostRefreshHook := snapstate.SetupPostRefreshHook
 	oldSetupRemoveHook := snapstate.SetupRemoveHook
@@ -191,6 +193,8 @@ func (s *snapmgrBaseTest) SetUpTest(c *C) {
 	oldEnsureSnapAbsentFromQuotaGroup := snapstate.EnsureSnapAbsentFromQuotaGroup
 	snapstate.SetupInstallHook = hookstate.SetupInstallHook
 	snapstate.SetupInstallComponentHook = hookstate.SetupInstallComponentHook
+	snapstate.SetupPostRefreshComponentHook = hookstate.SetupPostRefreshComponentHook
+	snapstate.SetupPreRefreshComponentHook = hookstate.SetupPreRefreshComponentHook
 	snapstate.SetupPreRefreshHook = hookstate.SetupPreRefreshHook
 	snapstate.SetupPostRefreshHook = hookstate.SetupPostRefreshHook
 	snapstate.SetupRemoveHook = hookstate.SetupRemoveHook
@@ -229,6 +233,8 @@ func (s *snapmgrBaseTest) SetUpTest(c *C) {
 	s.BaseTest.AddCleanup(func() {
 		snapstate.SetupInstallHook = oldSetupInstallHook
 		snapstate.SetupInstallComponentHook = oldSetupInstallComponentHook
+		snapstate.SetupPostRefreshComponentHook = oldSetupPostRefreshComponentHook
+		snapstate.SetupPreRefreshComponentHook = oldSetupPreRefreshComponentHook
 		snapstate.SetupPreRefreshHook = oldSetupPreRefreshHook
 		snapstate.SetupPostRefreshHook = oldSetupPostRefreshHook
 		snapstate.SetupRemoveHook = oldSetupRemoveHook
@@ -523,6 +529,7 @@ const (
 	noLastBeforeModificationsEdge
 	preferInstalled
 	localSnap
+	localRevision
 	needsKernelSetup
 	isHybrid
 )
@@ -7929,50 +7936,6 @@ func (s *snapmgrTestSuite) TestSnapdRefreshTasks(c *C) {
 	c.Assert(snapst.Current, Equals, snap.R(11))
 }
 
-type installTestType struct {
-	t snap.Type
-}
-
-func (t *installTestType) InstanceName() string {
-	panic("not expected")
-}
-
-func (t *installTestType) Type() snap.Type {
-	return t.t
-}
-
-func (t *installTestType) SnapBase() string {
-	panic("not expected")
-}
-
-func (t *installTestType) DownloadSize() int64 {
-	panic("not expected")
-}
-
-func (t *installTestType) Prereq(st *state.State, prqt snapstate.PrereqTracker) []string {
-	panic("not expected")
-}
-
-func (s *snapmgrTestSuite) TestMinimalInstallInfoSortByType(c *C) {
-	snaps := []snapstate.MinimalInstallInfo{
-		&installTestType{snap.TypeApp},
-		&installTestType{snap.TypeBase},
-		&installTestType{snap.TypeApp},
-		&installTestType{snap.TypeSnapd},
-		&installTestType{snap.TypeKernel},
-		&installTestType{snap.TypeGadget},
-	}
-
-	sort.Sort(snapstate.ByType(snaps))
-	c.Check(snaps, DeepEquals, []snapstate.MinimalInstallInfo{
-		&installTestType{snap.TypeSnapd},
-		&installTestType{snap.TypeKernel},
-		&installTestType{snap.TypeBase},
-		&installTestType{snap.TypeGadget},
-		&installTestType{snap.TypeApp},
-		&installTestType{snap.TypeApp}})
-}
-
 func (s *snapmgrTestSuite) TestInstalledSnaps(c *C) {
 	st := state.New(nil)
 	st.Lock()
@@ -9395,7 +9358,7 @@ func (s *snapmgrTestSuite) TestRefreshCandidatesMergeFlags(c *C) {
 	snapstate.Set(s.state, "some-snap", &snapstate.SnapState{Sequence: snapstatetest.NewSequenceFromSnapSideInfos([]*snap.SideInfo{si})})
 
 	globalFlags := &snapstate.Flags{IsAutoRefresh: true, IsContinuedAutoRefresh: true}
-	snapsup, _, err := cand.SnapSetupForUpdate(s.state, nil, 0, globalFlags, nil)
+	snapsup, _, err := cand.SnapSetupForUpdate(s.state, globalFlags)
 	c.Assert(err, IsNil)
 	c.Assert(snapsup, NotNil)
 	c.Assert(*snapsup, DeepEquals, snapstate.SnapSetup{

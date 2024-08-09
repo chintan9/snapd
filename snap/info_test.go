@@ -1801,6 +1801,9 @@ func (s *infoSuite) TestComponentFromSnapComponentInstance(c *C) {
 		{"snap_instance", "snap_instance", ""},
 		{"snap+component", "snap", "component"},
 		{"snap_instance+component", "snap_instance", "component"},
+		{"", "", ""},
+		// We allow empty snap in some cases (snapctl)
+		{"+comp1", "", "comp1"},
 	}
 
 	for _, t := range tests {
@@ -2367,6 +2370,38 @@ hooks:
 	c.Check(hook.SecurityTag(), Equals, "snap.test-snap_instance.hook.install")
 }
 
+func (s *infoSuite) TestTransientScopeGlob(c *C) {
+	pattern, err := snap.TransientScopeGlob("some-snap")
+	c.Assert(err, IsNil)
+	c.Check(pattern, Equals, "snap.some-snap.*.scope")
+	matched, err := filepath.Match(pattern, "snap.some-snap.some-app-4706fe54-7802-4808-aa7e-ae8b567239e0.scope")
+	c.Assert(err, IsNil)
+	c.Check(matched, Equals, true)
+}
+
+func (s *infoSuite) TestTransientScopeGlobInstance(c *C) {
+	pattern, err := snap.TransientScopeGlob("some-snap_instance-1")
+	c.Assert(err, IsNil)
+	c.Check(pattern, Equals, "snap.some-snap_instance-1.*.scope")
+	// matches instance
+	matched, err := filepath.Match(pattern, "snap.some-snap_instance-1.some-app-4706fe54-7802-4808-aa7e-ae8b567239e0.scope")
+	c.Assert(err, IsNil)
+	c.Check(matched, Equals, true)
+	// but not other instances
+	matched, err = filepath.Match(pattern, "snap.some-snap_instance-2.some-app-4706fe54-7802-4808-aa7e-ae8b567239e0.scope")
+	c.Assert(err, IsNil)
+	c.Check(matched, Equals, false)
+	// or the main snap
+	matched, err = filepath.Match(pattern, "snap.some-snap.some-app-4706fe54-7802-4808-aa7e-ae8b567239e0.scope")
+	c.Assert(err, IsNil)
+	c.Check(matched, Equals, false)
+}
+
+func (s *infoSuite) TestTransientScopeError(c *C) {
+	_, err := snap.TransientScopeGlob("invalid?name")
+	c.Assert(err.Error(), Equals, "invalid character in security tag: '?'")
+}
+
 func (s *infoSuite) TestComponentMountDir(c *C) {
 	dir := snap.ComponentMountDir("comp", snap.R(1), "snap")
 	c.Check(dir, Equals, filepath.Join(dirs.SnapMountDir, "snap", "components", "mnt", "comp", "1"))
@@ -2412,4 +2447,80 @@ apps:
 		CommandName: "test-snap+comp.hook.install",
 		SecurityTag: "snap.test-snap+comp.hook.install",
 	})
+}
+
+func (s *infoSuite) TestRegistryPlugAttrs(c *C) {
+	plug := &snap.PlugInfo{
+		Snap:      &snap.Info{SuggestedName: "test-snap"},
+		Name:      "test-plug",
+		Interface: "registry",
+		Attrs: map[string]interface{}{
+			"account": "foo",
+			"view":    "bar/baz",
+			"role":    "manager",
+		},
+	}
+
+	account, registry, view, err := snap.RegistryPlugAttrs(plug)
+	c.Assert(err, IsNil)
+	c.Assert(account, Equals, "foo")
+	c.Assert(registry, Equals, "bar")
+	c.Assert(view, Equals, "baz")
+}
+
+func (s *infoSuite) TestRegistryPlugAttrsInvalid(c *C) {
+	type testcase struct {
+		iface   string
+		account string
+		view    string
+		err     string
+	}
+
+	tcs := []testcase{
+		{
+			iface: "other-thing",
+			err:   "must be registry plug: other-thing",
+		},
+
+		{
+			iface:   "registry",
+			account: "my-acc",
+			view:    "reg",
+			err:     "\"view\" must conform to <registry>/<view>: reg",
+		},
+	}
+
+	for _, tc := range tcs {
+		plug := &snap.PlugInfo{
+			Snap:      &snap.Info{SuggestedName: "test-snap"},
+			Name:      "test-plug",
+			Interface: tc.iface,
+			Attrs: map[string]interface{}{
+				"account": tc.account,
+				"view":    tc.view,
+			},
+		}
+
+		_, _, _, err := snap.RegistryPlugAttrs(plug)
+		c.Assert(err, ErrorMatches, tc.err)
+	}
+}
+
+func (s *infoSuite) TestSplitSnapInstanceAndComponents(c *C) {
+	for _, tc := range []struct {
+		input string
+		snap  string
+		comps []string
+	}{
+		{"", "", []string{}},
+		{"snap", "snap", []string{}},
+		{"snap+comp1", "snap", []string{"comp1"}},
+		{"snap+comp-1+comp-2", "snap", []string{"comp-1", "comp-2"}},
+		{"+comp1", "", []string{"comp1"}},
+		{"+comp-1+comp-2", "", []string{"comp-1", "comp-2"}},
+	} {
+		snap, comps := snap.SplitSnapInstanceAndComponents(tc.input)
+		c.Check(snap, Equals, tc.snap, Commentf("%v", tc.input))
+		c.Check(comps, DeepEquals, tc.comps, Commentf("%v", tc.input))
+	}
 }

@@ -170,8 +170,14 @@ func (s *viewSuite) TestBundleWithSample(c *C) {
 			},
 		},
 	}
-	_, err := registry.New("acc", "foo", views, registry.NewJSONSchema())
+	reg, err := registry.New("acc", "foo", views, registry.NewJSONSchema())
 	c.Assert(err, IsNil)
+
+	view := reg.View("other")
+	c.Assert(view, IsNil)
+	view = reg.View("wifi-setup")
+	c.Assert(view, NotNil)
+	c.Assert(view.Registry(), Equals, reg)
 }
 
 func (s *viewSuite) TestAccessTypes(c *C) {
@@ -320,6 +326,10 @@ func (s *viewSuite) TestRegistryNotFound(c *C) {
 	_, err = view.Get(databag, "top-level")
 	c.Assert(err, testutil.ErrorIs, &registry.NotFoundError{})
 	c.Assert(err, ErrorMatches, `cannot get "top-level" in registry view acc/foo/bar: matching rules don't map to any values`)
+
+	_, err = view.Get(databag, "")
+	c.Assert(err, testutil.ErrorIs, &registry.NotFoundError{})
+	c.Assert(err, ErrorMatches, `cannot get registry view acc/foo/bar: matching rules don't map to any values`)
 
 	err = view.Set(databag, "nested", "thing")
 	c.Assert(err, IsNil)

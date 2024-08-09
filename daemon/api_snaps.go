@@ -135,6 +135,13 @@ func postSnap(c *Command, r *http.Request, user *auth.UserState) Response {
 	vars := muxVars(r)
 	inst.Snaps = []string{vars["name"]}
 
+	if len(inst.CompsRaw) > 0 {
+		// must be a string slice for /v2/snaps/<snap>
+		if err := inst.setCompsFromRawList(); err != nil {
+			return BadRequest("%s", err)
+		}
+	}
+
 	if err := inst.validate(); err != nil {
 		return BadRequest("%s", err)
 	}
@@ -158,7 +165,16 @@ func postSnap(c *Command, r *http.Request, user *auth.UserState) Response {
 		chg.Set("system-restart-immediate", true)
 	}
 
-	chg.Set("api-data", map[string]interface{}{"snap-names": inst.Snaps})
+	apiData := map[string]interface{}{}
+	if len(inst.CompsForSnaps) > 0 {
+		apiData["components"] = inst.CompsForSnaps
+		// TODO:COMPS: in install case we might want "snap-names" set
+		// if we installed the snap too
+	} else {
+		apiData["snap-names"] = inst.Snaps
+	}
+
+	chg.Set("api-data", apiData)
 
 	ensureStateSoon(st)
 
@@ -198,6 +214,8 @@ type snapInstruction struct {
 	Action string `json:"action"`
 	Amend  bool   `json:"amend"`
 	snapRevisionOptions
+	CompsRaw               json.RawMessage                  `json:"components"`
+	CompsForSnaps          map[string][]string              `json:"-"`
 	DevMode                bool                             `json:"devmode"`
 	JailMode               bool                             `json:"jailmode"`
 	Classic                bool                             `json:"classic"`
@@ -206,6 +224,7 @@ type snapInstruction struct {
 	Unaliased              bool                             `json:"unaliased"`
 	Prefer                 bool                             `json:"prefer"`
 	Purge                  bool                             `json:"purge,omitempty"`
+	Terminate              bool                             `json:"terminate"`
 	SystemRestartImmediate bool                             `json:"system-restart-immediate"`
 	Transaction            client.TransactionType           `json:"transaction"`
 	Snaps                  []string                         `json:"snaps"`
@@ -218,6 +237,20 @@ type snapInstruction struct {
 
 	// The fields below should not be unmarshalled into. Do not export them.
 	userID int
+}
+
+func (inst *snapInstruction) setCompsFromRawList() error {
+	compsList := []string{}
+	if err := json.Unmarshal(inst.CompsRaw, &compsList); err != nil {
+		return err
+	}
+	inst.CompsForSnaps = make(map[string][]string, len(compsList))
+	inst.CompsForSnaps[inst.Snaps[0]] = compsList
+	return nil
+}
+
+func (inst *snapInstruction) setCompsFromRawMap() error {
+	return json.Unmarshal(inst.CompsRaw, &inst.CompsForSnaps)
 }
 
 func (inst *snapInstruction) revnoOpts() *snapstate.RevisionOptions {
@@ -367,12 +400,27 @@ func (inst *snapInstruction) validate() error {
 		return fmt.Errorf("the prefer flag can only be specified on install")
 	}
 
+	if inst.Terminate && inst.Action != "remove" {
+		return fmt.Errorf(`terminate can only be specified for the "remove" action`)
+	}
+	if inst.Terminate && !inst.Revision.Unset() {
+		return fmt.Errorf(`terminate can only be specified when revision is unset`)
+	}
+
 	if err := inst.validateSnapshotOptions(); err != nil {
 		return err
 	}
 
 	if inst.Action == "snapshot" {
 		inst.cleanSnapshotOptions()
+	}
+
+	if len(inst.CompsRaw) > 0 {
+		switch inst.Action {
+		case "remove", "install":
+		default:
+			return fmt.Errorf("%q action is not supported for components", inst.Action)
+		}
 	}
 
 	return inst.snapRevisionOptions.validate()
@@ -415,11 +463,6 @@ func snapInstall(ctx context.Context, inst *snapInstruction, st *state.State) (s
 		return "", nil, fmt.Errorf(i18n.G("cannot install snap with empty name"))
 	}
 
-	flags, err := inst.installFlags()
-	if err != nil {
-		return "", nil, err
-	}
-
 	var ckey string
 	if inst.CohortKey == "" {
 		logger.Noticef("Installing snap %q revision %s", inst.Snaps[0], inst.Revision)
@@ -427,19 +470,62 @@ func snapInstall(ctx context.Context, inst *snapInstruction, st *state.State) (s
 		ckey = strutil.ElliptLeft(inst.CohortKey, 10)
 		logger.Noticef("Installing snap %q from cohort %q", inst.Snaps[0], ckey)
 	}
-	tset, err := snapstateInstall(ctx, st, inst.Snaps[0], inst.revnoOpts(), inst.userID, flags)
+
+	_, tss, err := installationTaskSets(ctx, st, inst)
 	if err != nil {
 		return "", nil, err
 	}
 
-	msg := fmt.Sprintf(i18n.G("Install %q snap"), inst.Snaps[0])
+	return installMessage(inst, ckey), tss, nil
+}
+
+func installMessage(inst *snapInstruction, cohort string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, i18n.G("Install %q snap"), inst.Snaps[0])
 	if inst.Channel != "stable" && inst.Channel != "" {
-		msg += fmt.Sprintf(" from %q channel", inst.Channel)
+		fmt.Fprintf(&b, i18n.G(" from %q channel"), inst.Channel)
 	}
 	if inst.CohortKey != "" {
-		msg += fmt.Sprintf(" from %q cohort", ckey)
+		fmt.Fprintf(&b, i18n.G(" from %q cohort"), cohort)
 	}
-	return msg, []*state.TaskSet{tset}, nil
+
+	if comps := inst.CompsForSnaps[inst.Snaps[0]]; len(comps) > 0 {
+		if len(comps) > 1 {
+			fmt.Fprintf(&b, i18n.G(" with components %s"), strutil.Quoted(comps))
+		} else {
+			fmt.Fprintf(&b, i18n.G(" with component %s"), strutil.Quoted(comps))
+		}
+	}
+
+	return b.String()
+}
+
+func multiInstallMessage(inst *snapInstruction) string {
+	if len(inst.Snaps) == 1 {
+		return installMessage(inst, "")
+	}
+
+	var b strings.Builder
+	fmt.Fprint(&b, i18n.G("Install snaps"))
+
+	for i, name := range inst.Snaps {
+		fmt.Fprintf(&b, " %q", name)
+
+		if comps := inst.CompsForSnaps[name]; len(comps) > 0 {
+			b.WriteString(" (")
+			if len(comps) > 1 {
+				fmt.Fprintf(&b, i18n.G("with components %s"), strutil.Quoted(comps))
+			} else {
+				fmt.Fprintf(&b, i18n.G("with component %s"), strutil.Quoted(comps))
+			}
+			b.WriteRune(')')
+		}
+
+		if i < len(inst.Snaps)-1 {
+			b.WriteRune(',')
+		}
+	}
+	return b.String()
 }
 
 func snapUpdate(_ context.Context, inst *snapInstruction, st *state.State) (string, []*state.TaskSet, error) {
@@ -477,13 +563,40 @@ func snapUpdate(_ context.Context, inst *snapInstruction, st *state.State) (stri
 }
 
 func snapRemove(_ context.Context, inst *snapInstruction, st *state.State) (string, []*state.TaskSet, error) {
-	ts, err := snapstate.Remove(st, inst.Snaps[0], inst.Revision, &snapstate.RemoveFlags{Purge: inst.Purge})
+	if len(inst.CompsForSnaps) > 0 {
+		return removeSnapComponents(inst, st)
+	} else {
+		return removeSnap(inst, st)
+	}
+}
+
+func removeSnap(inst *snapInstruction, st *state.State) (string, []*state.TaskSet, error) {
+	flags := &snapstate.RemoveFlags{Purge: inst.Purge, Terminate: inst.Terminate}
+	ts, err := snapstateRemove(st, inst.Snaps[0], inst.Revision, flags)
 	if err != nil {
 		return "", nil, err
 	}
 
 	msg := fmt.Sprintf(i18n.G("Remove %q snap"), inst.Snaps[0])
 	return msg, []*state.TaskSet{ts}, nil
+}
+
+func removeSnapComponents(inst *snapInstruction, st *state.State) (msg string, allTaskSets []*state.TaskSet, err error) {
+	compsMsg := make([]string, 0, len(inst.CompsForSnaps))
+	for snap, comps := range inst.CompsForSnaps {
+		// We call from here only when we remove components, not the
+		// full snap, so we need to refresh the security profiles.
+		tss, err := snapstateRemoveComponents(st, snap, comps,
+			snapstate.RemoveComponentsOpts{RefreshProfile: true})
+		if err != nil {
+			return "", nil, err
+		}
+		allTaskSets = append(allTaskSets, tss...)
+		compsMsg = append(compsMsg, fmt.Sprintf(i18n.G("%v for %q snap"), comps, snap))
+	}
+
+	msg = fmt.Sprintf(i18n.G("Remove component(s) %s"), strings.Join(compsMsg, ", "))
+	return msg, allTaskSets, nil
 }
 
 func snapRevert(_ context.Context, inst *snapInstruction, st *state.State) (string, []*state.TaskSet, error) {
@@ -646,6 +759,13 @@ func snapOpMany(c *Command, r *http.Request, user *auth.UserState) Response {
 	if inst.Channel != "" || !inst.Revision.Unset() || inst.DevMode || inst.JailMode || inst.CohortKey != "" || inst.LeaveCohort || inst.Prefer {
 		return BadRequest("unsupported option provided for multi-snap operation")
 	}
+	if len(inst.CompsRaw) > 0 {
+		// must be a map of snaps to components for /v2/snaps
+		if err := inst.setCompsFromRawMap(); err != nil {
+			return BadRequest("%s", err)
+		}
+	}
+
 	if err := inst.validate(); err != nil {
 		return BadRequest("%v", err)
 	}
@@ -677,7 +797,15 @@ func snapOpMany(c *Command, r *http.Request, user *auth.UserState) Response {
 		chg.Set("system-restart-immediate", true)
 	}
 
-	chg.Set("api-data", map[string]interface{}{"snap-names": res.Affected})
+	apiData := map[string]interface{}{}
+	if len(res.Affected) > 0 {
+		apiData["snap-names"] = res.Affected
+	}
+	if len(inst.CompsForSnaps) > 0 {
+		apiData["components"] = inst.CompsForSnaps
+	}
+
+	chg.Set("api-data", apiData)
 
 	ensureStateSoon(st)
 
@@ -709,34 +837,106 @@ func (inst *snapInstruction) dispatchForMany() (op snapManyActionFunc) {
 	return op
 }
 
-func snapInstallMany(_ context.Context, inst *snapInstruction, st *state.State) (*snapInstructionResult, error) {
+func installationTaskSets(ctx context.Context, st *state.State, inst *snapInstruction) ([]*snap.Info, []*state.TaskSet, error) {
+	expectOneSnap := len(inst.Snaps) == 1
+	opts := snapstate.Options{
+		UserID:        inst.userID,
+		ExpectOneSnap: expectOneSnap,
+	}
+
+	if expectOneSnap {
+		flags, err := inst.installFlags()
+		if err != nil {
+			return nil, nil, err
+		}
+		opts.Flags = flags
+	} else {
+		opts.Flags.Transaction = inst.Transaction
+	}
+
+	revOpts := snapstate.RevisionOptions{}
+	if expectOneSnap {
+		revOpts = *inst.revnoOpts()
+	}
+
+	var (
+		tss   []*state.TaskSet
+		snaps []snapstate.StoreSnap
+		infos []*snap.Info
+	)
+	for _, name := range inst.Snaps {
+		var snapst snapstate.SnapState
+		if err := snapstate.Get(st, name, &snapst); err != nil && !errors.Is(err, state.ErrNoState) {
+			return nil, nil, err
+		}
+
+		comps := inst.CompsForSnaps[name]
+
+		if snapst.IsInstalled() && len(comps) > 0 {
+			info, err := snapst.CurrentInfo()
+			if err != nil {
+				return nil, nil, err
+			}
+
+			ts, err := snapstateInstallComponents(ctx, st, comps, info, opts)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			infos = append(infos, info)
+			tss = append(tss, ts...)
+
+			continue
+		}
+
+		snaps = append(snaps, snapstate.StoreSnap{
+			InstanceName: name,
+			Components:   comps,
+			RevOpts:      revOpts,
+		})
+	}
+
+	// this means that we're installing a set of components for one snap that is
+	// already installed
+	if len(snaps) == 0 {
+		return infos, tss, nil
+	}
+
+	installed, ts, err := snapstateInstallWithGoal(ctx, st, snapstateStoreInstallGoal(snaps...), opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	infos = append(infos, installed...)
+	tss = append(tss, ts...)
+
+	return infos, tss, nil
+}
+
+func snapInstallMany(ctx context.Context, inst *snapInstruction, st *state.State) (*snapInstructionResult, error) {
 	for _, name := range inst.Snaps {
 		if len(name) == 0 {
-			return nil, fmt.Errorf(i18n.G("cannot install snap with empty name"))
+			return nil, errors.New(i18n.G("cannot install snap with empty name"))
 		}
 	}
-	transaction := inst.Transaction
-	// TODO use per request context passed in snap instruction
-	installed, tasksets, err := snapstateInstallMany(st, inst.Snaps, nil, inst.userID, &snapstate.Flags{Transaction: transaction})
+
+	if len(inst.Snaps) == 0 {
+		return nil, errors.New(i18n.G("cannot install zero snaps"))
+	}
+
+	installed, tasksets, err := installationTaskSets(ctx, st, inst)
 	if err != nil {
 		return nil, err
 	}
 
-	var msg string
-	switch len(inst.Snaps) {
-	case 0:
-		return nil, fmt.Errorf("cannot install zero snaps")
-	case 1:
-		msg = fmt.Sprintf(i18n.G("Install snap %q"), inst.Snaps[0])
-	default:
-		quoted := strutil.Quoted(inst.Snaps)
-		// TRANSLATORS: the %s is a comma-separated list of quoted snap names
-		msg = fmt.Sprintf(i18n.G("Install snaps %s"), quoted)
+	names := make([]string, 0, len(installed))
+	for _, sn := range installed {
+		names = append(names, sn.InstanceName())
 	}
 
 	return &snapInstructionResult{
-		Summary:  msg,
-		Affected: installed,
+		Summary:  multiInstallMessage(inst),
+		Affected: names,
 		Tasksets: tasksets,
 	}, nil
 }
@@ -882,24 +1082,51 @@ func meetSnapConstraintsForEnforce(ctx context.Context, inst *snapInstruction, s
 }
 
 func snapRemoveMany(_ context.Context, inst *snapInstruction, st *state.State) (*snapInstructionResult, error) {
-	flags := &snapstate.RemoveFlags{Purge: inst.Purge}
-	removed, tasksets, err := snapstateRemoveMany(st, inst.Snaps, flags)
-	if err != nil {
-		return nil, err
-	}
-
-	var msg string
-	switch len(inst.Snaps) {
-	case 0:
+	if len(inst.Snaps) == 0 && len(inst.CompsForSnaps) == 0 {
 		return nil, fmt.Errorf("cannot remove zero snaps")
-	case 1:
-		msg = fmt.Sprintf(i18n.G("Remove snap %q"), inst.Snaps[0])
-	default:
-		quoted := strutil.Quoted(inst.Snaps)
-		// TRANSLATORS: the %s is a comma-separated list of quoted snap names
-		msg = fmt.Sprintf(i18n.G("Remove snaps %s"), quoted)
 	}
 
+	var compsTaskSets, snapsTaskSets []*state.TaskSet
+	var removed []string
+	var msg, snapsMsg, compsMsg string
+	var err error
+	if len(inst.CompsForSnaps) > 0 {
+		for snap := range inst.CompsForSnaps {
+			if strutil.ListContains(inst.Snaps, snap) {
+				return nil, fmt.Errorf(i18n.G("unexpected request to remove some components and also the full snap (which would remove all components) for %q"), snap)
+			}
+		}
+		compsMsg, compsTaskSets, err = removeSnapComponents(inst, st)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(inst.Snaps) > 0 {
+		flags := &snapstate.RemoveFlags{Purge: inst.Purge, Terminate: inst.Terminate}
+		removed, snapsTaskSets, err = snapstateRemoveMany(st, inst.Snaps, flags)
+		if err != nil {
+			return nil, err
+		}
+		switch len(inst.Snaps) {
+		case 1:
+			snapsMsg = fmt.Sprintf(i18n.G("Remove snap %q"), inst.Snaps[0])
+		default:
+			quoted := strutil.Quoted(inst.Snaps)
+			// TRANSLATORS: the %s is a comma-separated list of quoted snap names
+			snapsMsg = fmt.Sprintf(i18n.G("Remove snaps %s"), quoted)
+		}
+	}
+
+	tasksets := make([]*state.TaskSet, 0, len(compsTaskSets)+len(snapsTaskSets))
+	tasksets = append(tasksets, compsTaskSets...)
+	tasksets = append(tasksets, snapsTaskSets...)
+	if snapsMsg == "" {
+		msg = compsMsg
+	} else if compsMsg == "" {
+		msg = snapsMsg
+	} else {
+		msg = fmt.Sprintf("%s - %s", snapsMsg, compsMsg)
+	}
 	return &snapInstructionResult{
 		Summary:  msg,
 		Affected: removed,

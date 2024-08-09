@@ -182,12 +182,12 @@ func (snapSeq *SnapSequence) RemoveComponentForRevision(snapRev snap.Revision, c
 	return unlinkedComp
 }
 
-// ComponentSideInfoForRev returns cref's component side info for the revision
+// ComponentStateForRev returns cref's component side info for the revision
 // (sequence point) indicated by revIdx if there is one.
-func (snapSeq *SnapSequence) ComponentSideInfoForRev(revIdx int, cref naming.ComponentRef) *snap.ComponentSideInfo {
+func (snapSeq *SnapSequence) ComponentStateForRev(revIdx int, cref naming.ComponentRef) *ComponentState {
 	for _, comp := range snapSeq.Revisions[revIdx].Components {
 		if comp.SideInfo.Component == cref {
-			return comp.SideInfo
+			return comp
 		}
 	}
 	// component not found
@@ -286,4 +286,10 @@ func (snapSeq *SnapSequence) MinimumLocalComponentRevision(compName string) snap
 		}
 	}
 	return local
+}
+
+// HasComponents returns true if the revision at the given index has
+// any components installed with it.
+func (snapSeq *SnapSequence) HasComponents(revIdx int) bool {
+	return len(snapSeq.Revisions[revIdx].Components) > 0
 }

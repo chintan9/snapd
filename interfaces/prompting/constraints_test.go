@@ -320,12 +320,12 @@ func (s *constraintsSuite) TestConstraintsContainPermissions(c *C) {
 	}
 }
 
-func constructPermissionsMaps() []map[string]map[string]interface{} {
-	var permissionsMaps []map[string]map[string]interface{}
+func constructPermissionsMaps() []map[string]map[string]any {
+	var permissionsMaps []map[string]map[string]any
 	// interfaceFilePermissionsMaps
-	filePermissionsMaps := make(map[string]map[string]interface{})
+	filePermissionsMaps := make(map[string]map[string]any)
 	for iface, permsMap := range prompting.InterfaceFilePermissionsMaps {
-		filePermissionsMaps[iface] = make(map[string]interface{}, len(permsMap))
+		filePermissionsMaps[iface] = make(map[string]any, len(permsMap))
 		for perm, val := range permsMap {
 			filePermissionsMaps[iface][perm] = val
 		}
@@ -396,7 +396,7 @@ func (s *constraintsSuite) TestAvailablePermissions(c *C) {
 func (s *constraintsSuite) TestAbstractPermissionsFromAppArmorPermissionsHappy(c *C) {
 	cases := []struct {
 		iface string
-		perms interface{}
+		perms any
 		list  []string
 	}{
 		{
@@ -440,7 +440,7 @@ func (s *constraintsSuite) TestAbstractPermissionsFromAppArmorPermissionsHappy(c
 func (s *constraintsSuite) TestAbstractPermissionsFromAppArmorPermissionsUnhappy(c *C) {
 	cases := []struct {
 		iface  string
-		perms  interface{}
+		perms  any
 		errStr string
 	}{
 		{
@@ -465,7 +465,7 @@ func (s *constraintsSuite) TestAbstractPermissionsFromAppArmorPermissionsUnhappy
 		},
 		{
 			"home",
-			notify.AA_MAY_GETATTR | notify.AA_MAY_READ,
+			notify.AA_MAY_GETCRED | notify.AA_MAY_READ,
 			"cannot map AppArmor permission to abstract permission for the home interface.*",
 		},
 	}
@@ -480,17 +480,17 @@ func (s *constraintsSuite) TestAbstractPermissionsToAppArmorPermissionsHappy(c *
 	cases := []struct {
 		iface string
 		list  []string
-		perms interface{}
+		perms any
 	}{
 		{
 			"home",
 			[]string{"read"},
-			notify.AA_MAY_OPEN | notify.AA_MAY_READ,
+			notify.AA_MAY_OPEN | notify.AA_MAY_READ | notify.AA_MAY_GETATTR,
 		},
 		{
 			"home",
 			[]string{"write"},
-			notify.AA_MAY_OPEN | notify.AA_MAY_WRITE | notify.AA_MAY_APPEND | notify.AA_MAY_CREATE | notify.AA_MAY_DELETE | notify.AA_MAY_RENAME | notify.AA_MAY_CHMOD | notify.AA_MAY_LOCK | notify.AA_MAY_LINK,
+			notify.AA_MAY_OPEN | notify.AA_MAY_WRITE | notify.AA_MAY_APPEND | notify.AA_MAY_CREATE | notify.AA_MAY_DELETE | notify.AA_MAY_RENAME | notify.AA_MAY_SETATTR | notify.AA_MAY_CHMOD | notify.AA_MAY_LOCK | notify.AA_MAY_LINK,
 		},
 		{
 			"home",
@@ -500,12 +500,12 @@ func (s *constraintsSuite) TestAbstractPermissionsToAppArmorPermissionsHappy(c *
 		{
 			"home",
 			[]string{"read", "execute"},
-			notify.AA_MAY_OPEN | notify.AA_MAY_READ | notify.AA_MAY_EXEC | notify.AA_EXEC_MMAP,
+			notify.AA_MAY_OPEN | notify.AA_MAY_READ | notify.AA_MAY_GETATTR | notify.AA_MAY_EXEC | notify.AA_EXEC_MMAP,
 		},
 		{
 			"home",
 			[]string{"execute", "write", "read"},
-			notify.AA_MAY_OPEN | notify.AA_MAY_READ | notify.AA_MAY_EXEC | notify.AA_EXEC_MMAP | notify.AA_MAY_WRITE | notify.AA_MAY_APPEND | notify.AA_MAY_CREATE | notify.AA_MAY_DELETE | notify.AA_MAY_RENAME | notify.AA_MAY_CHMOD | notify.AA_MAY_LOCK | notify.AA_MAY_LINK,
+			notify.AA_MAY_OPEN | notify.AA_MAY_READ | notify.AA_MAY_GETATTR | notify.AA_MAY_EXEC | notify.AA_EXEC_MMAP | notify.AA_MAY_WRITE | notify.AA_MAY_APPEND | notify.AA_MAY_CREATE | notify.AA_MAY_DELETE | notify.AA_MAY_RENAME | notify.AA_MAY_SETATTR | notify.AA_MAY_CHMOD | notify.AA_MAY_LOCK | notify.AA_MAY_LINK,
 		},
 	}
 	for _, testCase := range cases {

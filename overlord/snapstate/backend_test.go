@@ -92,8 +92,8 @@ type fakeOp struct {
 	dirOpts  *dirs.SnapDirOptions
 	undoInfo *backend.UndoInfo
 
-	compsToInstall, currentComps []*snap.ComponentSideInfo
-	compsToRemove, finalComps    []*snap.ComponentSideInfo
+	currentComps []*snap.ComponentSideInfo
+	finalComps   []*snap.ComponentSideInfo
 
 	containerName     string
 	containerFileName string
@@ -368,6 +368,18 @@ func (f *fakeStore) snap(spec snapSpec) (*snap.Info, error) {
 			},
 		}
 		slot.Apps["dbus-daemon"] = info.Apps["dbus-daemon"]
+	case "channel-for-registry":
+		info.Plugs = map[string]*snap.PlugInfo{
+			"my-plug": {
+				Snap:      info,
+				Interface: "registry",
+				Name:      "my-plug",
+				Attrs: map[string]interface{}{
+					"account": "my-publisher",
+					"view":    "my-reg/my-view",
+				},
+			},
+		}
 	}
 
 	if spec.Name == "provenance-snap" {
@@ -488,6 +500,7 @@ func (f *fakeStore) lookupRefresh(cand refreshCand) (*snap.Info, error) {
 		revno = r
 	}
 	confinement := snap.StrictConfinement
+	var components map[string]*snap.Component
 	switch cand.channel {
 	case "channel-for-7/stable":
 		revno = snap.R(7)
@@ -495,6 +508,17 @@ func (f *fakeStore) lookupRefresh(cand refreshCand) (*snap.Info, error) {
 		confinement = snap.ClassicConfinement
 	case "channel-for-devmode/stable":
 		confinement = snap.DevModeConfinement
+	case "channel-for-components":
+		components = map[string]*snap.Component{
+			"test-component": {
+				Type: snap.TestComponent,
+				Name: "test-component",
+			},
+			"kernel-modules-component": {
+				Type: snap.KernelModulesComponent,
+				Name: "kernel-modules-component",
+			},
+		}
 	}
 	if name == "some-snap-now-classic" {
 		confinement = "classic"
@@ -516,6 +540,7 @@ func (f *fakeStore) lookupRefresh(cand refreshCand) (*snap.Info, error) {
 		Architectures: []string{"all"},
 		Epoch:         epoch,
 		Base:          base,
+		Components:    components,
 	}
 
 	if strings.HasSuffix(cand.snapID, "-without-version-id") {
@@ -559,6 +584,18 @@ func (f *fakeStore) lookupRefresh(cand refreshCand) (*snap.Info, error) {
 	case "channel-for-core22/stable":
 		info.Base = "core22"
 		info.Revision = snap.R(2)
+	case "channel-for-registry":
+		info.Plugs = map[string]*snap.PlugInfo{
+			"my-plug": {
+				Snap:      info,
+				Interface: "registry",
+				Name:      "my-plug",
+				Attrs: map[string]interface{}{
+					"account": "my-publisher",
+					"view":    "my-reg/my-view",
+				},
+			},
+		}
 	}
 
 	var hit snap.Revision
@@ -670,9 +707,6 @@ func (f *fakeStore) SnapAction(ctx context.Context, currentSnaps []*store.Curren
 				revno:  info.Revision,
 				userID: userID,
 			})
-			if !a.Revision.Unset() {
-				info.Channel = ""
-			}
 			info.InstanceKey = instanceKey
 
 			sar := store.SnapActionResult{
@@ -993,30 +1027,14 @@ func (f *fakeSnappyBackend) SetupComponent(compFilePath string, compPi snap.Cont
 	return &backend.InstallRecord{}, nil
 }
 
-func (f *fakeSnappyBackend) SetupKernelModulesComponents(compsToInstall, currentComps []*snap.ComponentSideInfo, ksnapName string, ksnapRev snap.Revision, meter progress.Meter) (err error) {
-	meter.Notify("setup-kernel-modules-components")
+func (f *fakeSnappyBackend) SetupKernelModulesComponents(currentComps, finalComps []*snap.ComponentSideInfo, ksnapName string, ksnapRev snap.Revision, meter progress.Meter) error {
+	meter.Notify("prepare-kernel-modules-components")
 	f.appendOp(&fakeOp{
-		op:             "setup-kernel-modules-components",
-		compsToInstall: compsToInstall,
-		currentComps:   currentComps,
+		op:           "prepare-kernel-modules-components",
+		currentComps: currentComps,
+		finalComps:   finalComps,
 	})
-	if strings.HasSuffix(ksnapName, "+broken") {
-		return fmt.Errorf("cannot set-up kernel-modules for %s", ksnapName)
-	}
-	return nil
-}
-
-func (f *fakeSnappyBackend) RemoveKernelModulesComponentsSetup(compsToRemove, finalComps []*snap.ComponentSideInfo, ksnapName string, ksnapRev snap.Revision, meter progress.Meter) (err error) {
-	meter.Notify("remove-kernel-modules-components-setup")
-	f.appendOp(&fakeOp{
-		op:            "remove-kernel-modules-components-setup",
-		compsToRemove: compsToRemove,
-		finalComps:    finalComps,
-	})
-	if strings.HasSuffix(ksnapName, "+reverterr") {
-		return fmt.Errorf("cannot remove set-up of kernel-modules for %s", ksnapName)
-	}
-	return nil
+	return f.maybeErrForLastOp()
 }
 
 func (f *fakeSnappyBackend) UndoSetupComponent(cpi snap.ContainerPlaceInfo, installRecord *backend.InstallRecord, dev snap.Device, meter progress.Meter) error {
@@ -1263,6 +1281,17 @@ func (f *fakeSnappyBackend) StopServices(svcs []*snap.AppInfo, reason snap.Servi
 	f.appendOp(&fakeOp{
 		op:   fmt.Sprintf("stop-snap-services:%s", reason),
 		path: svcSnapMountDir(svcs),
+	})
+	return f.maybeErrForLastOp()
+}
+
+func (f *fakeSnappyBackend) KillSnapApps(snapName string, reason snap.AppKillReason, meter progress.Meter, tm timings.Measurer) error {
+	// This ensures we are using the right variant between NewTaskProgressAdapter{Locked,Unlocked}
+	meter.Notify("kill-snap-apps")
+
+	f.appendOp(&fakeOp{
+		op:   fmt.Sprintf("kill-snap-apps:%s", reason),
+		name: snapName,
 	})
 	return f.maybeErrForLastOp()
 }

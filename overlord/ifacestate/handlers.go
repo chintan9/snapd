@@ -189,13 +189,13 @@ func (m *InterfaceManager) doSetupProfiles(task *state.Task, tomb *tomb.Tomb) er
 	if err := m.setupProfilesForAppSet(task, appSet, opts, perfTimings); err != nil {
 		return err
 	}
-	return setPendingProfilesSideInfo(task.State(), snapsup.InstanceName(), snapsup.SideInfo)
+	return setPendingProfilesSideInfo(task.State(), snapsup.InstanceName(), appSet)
 }
 
 // setupPendingProfilesSideInfo helps updating information about any
 // revision for which security profiles are set up while the snap is
 // not yet active.
-func setPendingProfilesSideInfo(st *state.State, instanceName string, si *snap.SideInfo) error {
+func setPendingProfilesSideInfo(st *state.State, instanceName string, appSet *interfaces.SnapAppSet) error {
 	var snapst snapstate.SnapState
 	if err := snapstate.Get(st, instanceName, &snapst); err != nil && !errors.Is(err, state.ErrNoState) {
 		return err
@@ -208,9 +208,21 @@ func setPendingProfilesSideInfo(st *state.State, instanceName string, si *snap.S
 		// nothing is pending
 		return nil
 	}
-	snapst.PendingSecurity = &snapstate.PendingSecurityState{
-		SideInfo: si,
+
+	if appSet != nil {
+		csis := make([]*snap.ComponentSideInfo, 0, len(appSet.Components()))
+		for _, ci := range appSet.Components() {
+			csis = append(csis, &ci.ComponentSideInfo)
+		}
+
+		snapst.PendingSecurity = &snapstate.PendingSecurityState{
+			SideInfo:   &appSet.Info().SideInfo,
+			Components: csis,
+		}
+	} else {
+		snapst.PendingSecurity = &snapstate.PendingSecurityState{}
 	}
+
 	snapstate.Set(st, instanceName, &snapst)
 	return nil
 }
@@ -428,7 +440,7 @@ func (m *InterfaceManager) undoSetupProfiles(task *state.Task, tomb *tomb.Tomb) 
 		if err := m.setupProfilesForAppSet(task, appSet, opts, perfTimings); err != nil {
 			return err
 		}
-		return setPendingProfilesSideInfo(task.State(), snapName, sideInfo)
+		return setPendingProfilesSideInfo(task.State(), snapName, appSet)
 	}
 }
 
@@ -581,7 +593,6 @@ func (m *InterfaceManager) doConnect(task *state.Task, _ *tomb.Tomb) (err error)
 		return fmt.Errorf("snap %q has no %q plug", connRef.PlugRef.Snap, connRef.PlugRef.Name)
 	}
 
-	// TODO: should the repo return an app set here?
 	plugAppSet, err := appSetForSnapRevision(st, plug.Snap)
 	if err != nil {
 		return fmt.Errorf("building app set for snap %q: %v", plug.Snap.InstanceName(), err)
@@ -593,7 +604,6 @@ func (m *InterfaceManager) doConnect(task *state.Task, _ *tomb.Tomb) (err error)
 		return fmt.Errorf("snap %q has no %q slot", connRef.SlotRef.Snap, connRef.SlotRef.Name)
 	}
 
-	// TODO: should the repo return an app set here?
 	slotAppSet, err := appSetForSnapRevision(st, slot.Snap)
 	if err != nil {
 		return fmt.Errorf("building app set for snap %q: %v", slot.Snap.InstanceName(), err)
@@ -611,7 +621,7 @@ func (m *InterfaceManager) doConnect(task *state.Task, _ *tomb.Tomb) (err error)
 	// policy "connection" rules, other auto-connections obey the
 	// "auto-connection" rules
 	if autoConnect && !byGadget {
-		autochecker, err := newAutoConnectChecker(st, task, m.repo, deviceCtx)
+		autochecker, err := newAutoConnectChecker(st, m.repo, deviceCtx)
 		if err != nil {
 			return err
 		}
@@ -1360,7 +1370,7 @@ func (m *InterfaceManager) doAutoConnect(task *state.Task, _ *tomb.Tomb) error {
 
 	snapName := snapsup.InstanceName()
 
-	autochecker, err := newAutoConnectChecker(st, task, m.repo, deviceCtx)
+	autochecker, err := newAutoConnectChecker(st, m.repo, deviceCtx)
 	if err != nil {
 		return err
 	}
@@ -1431,7 +1441,7 @@ func (m *InterfaceManager) doAutoConnect(task *state.Task, _ *tomb.Tomb) error {
 	cannotAutoConnectLog := func(plug *snap.PlugInfo, candRefs []string) string {
 		return fmt.Sprintf("cannot auto-connect plug %s, candidates found: %s", plug, strings.Join(candRefs, ", "))
 	}
-	if err := autochecker.addAutoConnections(newconns, plugs, nil, conns, cannotAutoConnectLog, conflictError); err != nil {
+	if err := autochecker.addAutoConnections(task, newconns, plugs, nil, conns, cannotAutoConnectLog, conflictError); err != nil {
 		return err
 	}
 	// Auto-connect all the slots
@@ -1444,7 +1454,7 @@ func (m *InterfaceManager) doAutoConnect(task *state.Task, _ *tomb.Tomb) error {
 		cannotAutoConnectLog := func(plug *snap.PlugInfo, candRefs []string) string {
 			return fmt.Sprintf("cannot auto-connect slot %s to plug %s, candidates found: %s", slot, plug, strings.Join(candRefs, ", "))
 		}
-		if err := autochecker.addAutoConnections(newconns, candidates, filterForSlot(slot), conns, cannotAutoConnectLog, conflictError); err != nil {
+		if err := autochecker.addAutoConnections(task, newconns, candidates, filterForSlot(slot), conns, cannotAutoConnectLog, conflictError); err != nil {
 			return err
 		}
 	}
@@ -1681,7 +1691,7 @@ func (m *InterfaceManager) doHotplugConnect(task *state.Task, _ *tomb.Tomb) erro
 		conn := conns[id]
 		// device was not unplugged, this is the case if snapd is restarted and we enumerate devices.
 		// note, the situation where device was not unplugged but has changed is handled
-		// by hotlugDeviceAdded handler - updateDevice.
+		// by hotplugDeviceAdded handler - updateDevice.
 		if !conn.HotplugGone || conn.Undesired {
 			continue
 		}
@@ -1700,7 +1710,7 @@ func (m *InterfaceManager) doHotplugConnect(task *state.Task, _ *tomb.Tomb) erro
 	}
 
 	// find new auto-connections
-	autochecker, err := newAutoConnectChecker(st, task, m.repo, deviceCtx)
+	autochecker, err := newAutoConnectChecker(st, m.repo, deviceCtx)
 	if err != nil {
 		return err
 	}
@@ -1713,7 +1723,7 @@ func (m *InterfaceManager) doHotplugConnect(task *state.Task, _ *tomb.Tomb) erro
 	cannotAutoConnectLog := func(plug *snap.PlugInfo, candRefs []string) string {
 		return fmt.Sprintf("cannot auto-connect hotplug slot %s to plug %s, candidates found: %s", slot, plug, strings.Join(candRefs, ", "))
 	}
-	if err := autochecker.addAutoConnections(newconns, candidates, filterForSlot(slot), conns, cannotAutoConnectLog, conflictError); err != nil {
+	if err := autochecker.addAutoConnections(task, newconns, candidates, filterForSlot(slot), conns, cannotAutoConnectLog, conflictError); err != nil {
 		return err
 	}
 

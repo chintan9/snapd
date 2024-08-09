@@ -78,13 +78,19 @@ func expectedDoInstallTasks(typ snap.Type, opts, discards int, startTasks []stri
 		}
 	}
 	if startTasks == nil {
-		if opts&localSnap != 0 {
+		switch {
+		case opts&localSnap != 0:
 			startTasks = []string{
 				"prerequisites",
 				"prepare-snap",
 				"mount-snap",
 			}
-		} else {
+		case opts&localRevision != 0:
+			startTasks = []string{
+				"prerequisites",
+				"prepare-snap",
+			}
+		default:
 			startTasks = []string{
 				"prerequisites",
 				"download-snap",
@@ -100,6 +106,28 @@ func expectedDoInstallTasks(typ snap.Type, opts, discards int, startTasks []stri
 			"stop-snap-services",
 			"remove-aliases",
 		)
+	}
+
+	var tasksBeforeCurrentUnlink, tasksAfterLinkSnap, tasksAfterPostOpHook []string
+	for range components {
+		compOpts := compOptMultiCompInstall
+		if opts&localSnap != 0 {
+			compOpts |= compOptIsLocal
+		}
+		if opts&unlinkBefore != 0 {
+			compOpts |= compOptIsActive | compOptDuringSnapRefresh
+		}
+
+		beforeLink, linkToHooks, hooksAndAfter := expectedComponentInstallTasksSplit(compOpts)
+
+		tasksBeforeCurrentUnlink = append(tasksBeforeCurrentUnlink, beforeLink...)
+		tasksAfterLinkSnap = append(tasksAfterLinkSnap, linkToHooks...)
+		tasksAfterPostOpHook = append(tasksAfterPostOpHook, hooksAndAfter...)
+	}
+
+	expected = append(expected, tasksBeforeCurrentUnlink...)
+
+	if opts&unlinkBefore != 0 {
 		expected = append(expected, "unlink-current-snap")
 	}
 	if opts&updatesGadgetAssets != 0 && opts&needsKernelSetup != 0 {
@@ -114,20 +142,8 @@ func expectedDoInstallTasks(typ snap.Type, opts, discards int, startTasks []stri
 
 	expected = append(expected, "copy-snap-data")
 
-	afterLinkSnap := make([]string, 0, len(components))
-	for range components {
-		compTasks := expectedComponentInstallTasks(compOptSkipSecurity)
-		for i, t := range compTasks {
-			if t == "link-component" {
-				afterLinkSnap = append(afterLinkSnap, compTasks[i:]...)
-				break
-			}
-			expected = append(expected, t)
-		}
-	}
-
 	expected = append(expected, "setup-profiles", "link-snap")
-	expected = append(expected, afterLinkSnap...)
+	expected = append(expected, tasksAfterLinkSnap...)
 	expected = append(expected, "auto-connect")
 	if opts&updatesGadgetAssets != 0 && opts&needsKernelSetup != 0 {
 		expected = append(expected, "discard-old-kernel-snap-setup")
@@ -145,10 +161,14 @@ func expectedDoInstallTasks(typ snap.Type, opts, discards int, startTasks []stri
 		expected = append(expected, "run-hook[post-refresh]")
 	} else {
 		expected = append(expected, "run-hook[install]")
-		if opts&(noConfigure|runCoreConfigure) == 0 {
-			expected = append(expected, "run-hook[default-configure]")
-		}
 	}
+
+	expected = append(expected, tasksAfterPostOpHook...)
+
+	if opts&unlinkBefore == 0 && opts&(noConfigure|runCoreConfigure) == 0 {
+		expected = append(expected, "run-hook[default-configure]")
+	}
+
 	expected = append(expected, "start-snap-services")
 	for i := 0; i < discards; i++ {
 		expected = append(expected,
@@ -205,6 +225,12 @@ func verifyInstallTasksWithComponents(c *C, typ snap.Type, opts, discards int, c
 	for _, t := range ts.Tasks() {
 		switch t.Kind() {
 		case "prepare-component", "download-component":
+			if t.Change() == nil {
+				// Add to a change so we can call snapstate.TaskComponentSetup
+				chg := t.State().NewChange("install", "install...")
+				chg.AddAll(ts)
+			}
+
 			compsup, _, err := snapstate.TaskComponentSetup(t)
 			c.Assert(err, IsNil)
 			c.Check(compsup.CompSideInfo.Component.ComponentName, Equals, components[count])
@@ -511,7 +537,7 @@ func (s *snapmgrTestSuite) TestInstallWithDeviceContextNoRemodelConflict(c *C) {
 	chg := s.state.NewChange("remodel", "remodel")
 	chg.AddTask(tugc)
 
-	deviceCtx := &snapstatetest.TrivialDeviceContext{CtxStore: s.fakeStore}
+	deviceCtx := &snapstatetest.TrivialDeviceContext{CtxStore: s.fakeStore, DeviceModel: &asserts.Model{}}
 
 	opts := &snapstate.RevisionOptions{Channel: "some-channel"}
 	ts, err := snapstate.InstallWithDeviceContext(context.Background(), s.state, "brand-gadget", opts, 0, snapstate.Flags{}, nil, deviceCtx, chg.ID())
@@ -537,7 +563,7 @@ func (s *snapmgrTestSuite) TestInstallWithDeviceContextRemodelConflict(c *C) {
 	chg := s.state.NewChange("remodel", "remodel")
 	chg.AddTask(tugc)
 
-	deviceCtx := &snapstatetest.TrivialDeviceContext{CtxStore: s.fakeStore}
+	deviceCtx := &snapstatetest.TrivialDeviceContext{CtxStore: s.fakeStore, DeviceModel: &asserts.Model{}}
 
 	opts := &snapstate.RevisionOptions{Channel: "some-channel"}
 	ts, err := snapstate.InstallWithDeviceContext(context.Background(), s.state, "brand-gadget", opts, 0, snapstate.Flags{}, nil, deviceCtx, "")
@@ -1042,18 +1068,23 @@ func (s *snapmgrTestSuite) TestInstallManySnapOneWithDefaultTrack(c *C) {
 // A sneakyStore changes the state when called
 type sneakyStore struct {
 	*fakeStore
-	state *state.State
+	state  *state.State
+	remove bool
 }
 
 func (s sneakyStore) SnapAction(ctx context.Context, currentSnaps []*store.CurrentSnap, actions []*store.SnapAction, assertQuery store.AssertionQuery, user *auth.UserState, opts *store.RefreshOptions) ([]store.SnapActionResult, []store.AssertionResult, error) {
 	s.state.Lock()
-	snapstate.Set(s.state, "some-snap", &snapstate.SnapState{
-		Active:          true,
-		TrackingChannel: "latest/edge",
-		Sequence:        snapstatetest.NewSequenceFromSnapSideInfos([]*snap.SideInfo{{RealName: "some-snap", SnapID: "some-snap-id", Revision: snap.R(1)}}),
-		Current:         snap.R(1),
-		SnapType:        "app",
-	})
+	if s.remove {
+		snapstate.Set(s.state, "some-snap", nil)
+	} else {
+		snapstate.Set(s.state, "some-snap", &snapstate.SnapState{
+			Active:          true,
+			TrackingChannel: "latest/edge",
+			Sequence:        snapstatetest.NewSequenceFromSnapSideInfos([]*snap.SideInfo{{RealName: "some-snap", SnapID: "some-snap-id", Revision: snap.R(1)}}),
+			Current:         snap.R(1),
+			SnapType:        "app",
+		})
+	}
 	s.state.Unlock()
 	return s.fakeStore.SnapAction(ctx, currentSnaps, actions, assertQuery, user, opts)
 }
@@ -1077,7 +1108,7 @@ func (s *snapmgrTestSuite) TestInstallPathTooEarly(c *C) {
 	defer r()
 
 	mockSnap := makeTestSnap(c, "name: some-snap\nversion: 1.0")
-	t := snapstate.PathInstallGoal("some-snap", mockSnap, &snap.SideInfo{RealName: "some-snap"}, snapstate.RevisionOptions{})
+	t := snapstate.PathInstallGoal("some-snap", mockSnap, &snap.SideInfo{RealName: "some-snap"}, nil, snapstate.RevisionOptions{})
 	_, _, err := snapstate.InstallWithGoal(context.Background(), s.state, t, snapstate.Options{
 		Seed: true,
 	})
@@ -1963,12 +1994,42 @@ func (s *snapmgrTestSuite) TestInstallWithCohortRunThrough(c *C) {
 }
 
 func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
+	const (
+		channel      = ""
+		snapName     = "some-snap"
+		defaultTrack = ""
+	)
+	s.testInstallWithRevisionRunThrough(c, snapName, channel, defaultTrack)
+}
+
+func (s *snapmgrTestSuite) TestInstallWithRevisionRunThroughChannel(c *C) {
+	const (
+		channel      = "some-channel/stable"
+		snapName     = "some-snap"
+		defaultTrack = ""
+	)
+	s.testInstallWithRevisionRunThrough(c, snapName, channel, defaultTrack)
+}
+
+func (s *snapmgrTestSuite) TestInstallWithRevisionRunThroughDefaultTrackWithChannel(c *C) {
+	const (
+		channel      = "edge"
+		snapName     = "some-snap-with-default-track"
+		defaultTrack = "2.0/edge"
+	)
+	s.testInstallWithRevisionRunThrough(c, snapName, channel, defaultTrack)
+}
+
+func (s *snapmgrTestSuite) testInstallWithRevisionRunThrough(c *C, snapName, requestedChannel, defaultTrack string) {
 	s.state.Lock()
 	defer s.state.Unlock()
 
+	snapID := snapName + "-id"
+	snapFileName := snapName + "_42.snap"
+
 	chg := s.state.NewChange("install", "install a snap")
-	opts := &snapstate.RevisionOptions{Channel: "some-channel", Revision: snap.R(42)}
-	ts, err := snapstate.Install(context.Background(), s.state, "some-snap", opts, s.user.ID, snapstate.Flags{})
+	opts := &snapstate.RevisionOptions{Channel: requestedChannel, Revision: snap.R(42)}
+	ts, err := snapstate.Install(context.Background(), s.state, snapName, opts, s.user.ID, snapstate.Flags{})
 	c.Assert(err, IsNil)
 	chg.AddAll(ts)
 
@@ -1980,8 +2041,8 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 	c.Check(snapstate.Installing(s.state), Equals, false)
 	c.Check(s.fakeStore.downloads, DeepEquals, []fakeDownload{{
 		macaroon: s.user.StoreMacaroon,
-		name:     "some-snap",
-		target:   filepath.Join(dirs.SnapBlobDir, "some-snap_42.snap"),
+		name:     snapName,
+		target:   filepath.Join(dirs.SnapBlobDir, snapFileName),
 	}})
 	expected := fakeOps{
 		{
@@ -1992,19 +2053,20 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 			op: "storesvc-snap-action:action",
 			action: store.SnapAction{
 				Action:       "install",
-				InstanceName: "some-snap",
+				InstanceName: snapName,
 				Revision:     snap.R(42),
+				Channel:      requestedChannel,
 			},
 			revno:  snap.R(42),
 			userID: 1,
 		},
 		{
 			op:   "storesvc-download",
-			name: "some-snap",
+			name: snapName,
 		},
 		{
 			op:    "validate-snap:Doing",
-			name:  "some-snap",
+			name:  snapName,
 			revno: snap.R(42),
 		},
 		{
@@ -2013,48 +2075,50 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 		},
 		{
 			op:   "open-snap-file",
-			path: filepath.Join(dirs.SnapBlobDir, "some-snap_42.snap"),
+			path: filepath.Join(dirs.SnapBlobDir, snapFileName),
 			sinfo: snap.SideInfo{
-				RealName: "some-snap",
-				SnapID:   "some-snap-id",
+				RealName: snapName,
+				SnapID:   snapID,
 				Revision: snap.R(42),
+				Channel:  requestedChannel,
 			},
 		},
 		{
 			op:    "setup-snap",
-			name:  "some-snap",
-			path:  filepath.Join(dirs.SnapBlobDir, "some-snap_42.snap"),
+			name:  snapName,
+			path:  filepath.Join(dirs.SnapBlobDir, snapFileName),
 			revno: snap.R(42),
 		},
 		{
 			op:   "copy-data",
-			path: filepath.Join(dirs.SnapMountDir, "some-snap/42"),
+			path: filepath.Join(dirs.SnapMountDir, filepath.Join(snapName, "42")),
 			old:  "<no-old>",
 		},
 		{
 			op:   "setup-snap-save-data",
-			path: filepath.Join(dirs.SnapDataSaveDir, "some-snap"),
+			path: filepath.Join(dirs.SnapDataSaveDir, snapName),
 		},
 		{
 			op:    "setup-profiles:Doing",
-			name:  "some-snap",
+			name:  snapName,
 			revno: snap.R(42),
 		},
 		{
 			op: "candidate",
 			sinfo: snap.SideInfo{
-				RealName: "some-snap",
-				SnapID:   "some-snap-id",
+				RealName: snapName,
+				SnapID:   snapID,
 				Revision: snap.R(42),
+				Channel:  requestedChannel,
 			},
 		},
 		{
 			op:   "link-snap",
-			path: filepath.Join(dirs.SnapMountDir, "some-snap/42"),
+			path: filepath.Join(dirs.SnapMountDir, filepath.Join(snapName, "42")),
 		},
 		{
 			op:    "auto-connect:Doing",
-			name:  "some-snap",
+			name:  snapName,
 			revno: snap.R(42),
 		},
 		{
@@ -2062,7 +2126,7 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 		},
 		{
 			op:    "cleanup-trash",
-			name:  "some-snap",
+			name:  snapName,
 			revno: snap.R(42),
 		},
 	}
@@ -2070,41 +2134,55 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 	c.Assert(s.fakeBackend.ops.Ops(), DeepEquals, expected.Ops())
 	c.Assert(s.fakeBackend.ops, DeepEquals, expected)
 
+	var setupChannel, trackedChannel string
+	switch {
+	case defaultTrack != "":
+		trackedChannel = defaultTrack
+		setupChannel = defaultTrack
+	case requestedChannel != "":
+		trackedChannel = requestedChannel
+		setupChannel = requestedChannel
+	default:
+		trackedChannel = "latest/stable"
+		setupChannel = "stable"
+	}
+
 	// check progress
 	ta := ts.Tasks()
 	task := ta[1]
 	_, cur, total := task.Progress()
 	c.Assert(cur, Equals, s.fakeStore.fakeCurrentProgress)
 	c.Assert(total, Equals, s.fakeStore.fakeTotalProgress)
-	c.Check(task.Summary(), Equals, `Download snap "some-snap" (42) from channel "some-channel"`)
+	c.Check(task.Summary(), Equals, fmt.Sprintf(`Download snap "%s" (42) from channel "%s"`, snapName, setupChannel))
 
 	// check link/start snap summary
 	linkTask := ta[len(ta)-9]
-	c.Check(linkTask.Summary(), Equals, `Make snap "some-snap" (42) available to the system`)
+	c.Check(linkTask.Summary(), Equals, fmt.Sprintf(`Make snap "%s" (42) available to the system`, snapName))
 	startTask := ta[len(ta)-3]
-	c.Check(startTask.Summary(), Equals, `Start snap "some-snap" (42) services`)
+	c.Check(startTask.Summary(), Equals, fmt.Sprintf(`Start snap "%s" (42) services`, snapName))
 
 	// verify snap-setup in the task state
 	var snapsup snapstate.SnapSetup
 	err = task.Get("snap-setup", &snapsup)
 	c.Assert(err, IsNil)
 	c.Assert(snapsup, DeepEquals, snapstate.SnapSetup{
-		Channel:  "some-channel",
+		Channel:  setupChannel,
 		UserID:   s.user.ID,
-		SnapPath: filepath.Join(dirs.SnapBlobDir, "some-snap_42.snap"),
+		SnapPath: filepath.Join(dirs.SnapBlobDir, snapFileName),
 		DownloadInfo: &snap.DownloadInfo{
 			DownloadURL: "https://some-server.com/some/path.snap",
 			Size:        5,
 		},
 		SideInfo:  snapsup.SideInfo,
 		Type:      snap.TypeApp,
-		Version:   "some-snapVer",
+		Version:   snapName + "Ver",
 		PlugsOnly: true,
 	})
 	c.Assert(snapsup.SideInfo, DeepEquals, &snap.SideInfo{
-		RealName: "some-snap",
+		RealName: snapName,
 		Revision: snap.R(42),
-		SnapID:   "some-snap-id",
+		SnapID:   snapID,
+		Channel:  requestedChannel,
 	})
 
 	// verify snaps in the system state
@@ -2112,15 +2190,16 @@ func (s *snapmgrTestSuite) TestInstallWithRevisionRunThrough(c *C) {
 	err = s.state.Get("snaps", &snaps)
 	c.Assert(err, IsNil)
 
-	snapst := snaps["some-snap"]
+	snapst := snaps[snapName]
 	c.Assert(snapst, NotNil)
 	c.Assert(snapst.Active, Equals, true)
-	c.Assert(snapst.TrackingChannel, Equals, "some-channel/stable")
+	c.Assert(snapst.TrackingChannel, Equals, trackedChannel)
 	c.Assert(snapst.CohortKey, Equals, "")
 	c.Assert(snapst.Sequence.Revisions[0], DeepEquals, sequence.NewRevisionSideState(&snap.SideInfo{
-		RealName: "some-snap",
-		SnapID:   "some-snap-id",
+		RealName: snapName,
+		SnapID:   snapID,
 		Revision: snap.R(42),
+		Channel:  requestedChannel,
 	}, nil))
 	c.Assert(snapst.Required, Equals, false)
 }
@@ -2394,11 +2473,12 @@ epoch: 1*
 	err = task.Get("snap-setup", &snapsup)
 	c.Assert(err, IsNil)
 	c.Assert(snapsup, DeepEquals, snapstate.SnapSetup{
-		SnapPath:  mockSnap,
-		SideInfo:  snapsup.SideInfo,
-		Type:      snap.TypeApp,
-		Version:   "1.0",
-		PlugsOnly: true,
+		SnapPath:                        mockSnap,
+		SideInfo:                        snapsup.SideInfo,
+		Type:                            snap.TypeApp,
+		Version:                         "1.0",
+		PlugsOnly:                       true,
+		PreUpdateKernelModuleComponents: []*snap.ComponentSideInfo{},
 	})
 	c.Assert(snapsup.SideInfo, DeepEquals, &snap.SideInfo{
 		RealName: "mock",
@@ -2673,6 +2753,7 @@ func (s *snapmgrTestSuite) TestInstallWithoutCoreRunThrough1(c *C) {
 				Action:       "install",
 				InstanceName: "some-snap",
 				Revision:     snap.R(42),
+				Channel:      "some-channel",
 			},
 			revno:  snap.R(42),
 			userID: 1,
@@ -2778,6 +2859,7 @@ func (s *snapmgrTestSuite) TestInstallWithoutCoreRunThrough1(c *C) {
 				RealName: "some-snap",
 				SnapID:   "some-snap-id",
 				Revision: snap.R(42),
+				Channel:  "some-channel",
 			},
 		},
 		{
@@ -2806,6 +2888,7 @@ func (s *snapmgrTestSuite) TestInstallWithoutCoreRunThrough1(c *C) {
 				RealName: "some-snap",
 				SnapID:   "some-snap-id",
 				Revision: snap.R(42),
+				Channel:  "some-channel",
 			},
 		},
 		{
@@ -2975,7 +3058,7 @@ func (s *snapmgrTestSuite) TestInstallWithoutCoreTwoSnapsWithFailureRunThrough(c
 		c.Assert(snapst2.Sequence.Revisions[0], DeepEquals, sequence.NewRevisionSideState(&snap.SideInfo{
 			RealName: "snap2",
 			SnapID:   "snap2-id",
-			Channel:  "",
+			Channel:  "some-other-channel",
 			Revision: snap.R(21),
 		}, nil))
 	}
@@ -3144,6 +3227,7 @@ func (s *snapmgrTestSuite) TestInstallDefaultProviderRunThrough(c *C) {
 			Action:       "install",
 			InstanceName: "snap-content-plug",
 			Revision:     snap.R(42),
+			Channel:      "stable",
 		},
 		revno:  snap.R(42),
 		userID: 1,
@@ -3228,6 +3312,7 @@ func (s *snapmgrTestSuite) TestInstallDefaultProviderRunThrough(c *C) {
 			RealName: "snap-content-plug",
 			SnapID:   "snap-content-plug-id",
 			Revision: snap.R(42),
+			Channel:  "stable",
 		},
 	}, {
 		op:    "setup-snap",
@@ -3251,6 +3336,7 @@ func (s *snapmgrTestSuite) TestInstallDefaultProviderRunThrough(c *C) {
 			RealName: "snap-content-plug",
 			SnapID:   "snap-content-plug-id",
 			Revision: snap.R(42),
+			Channel:  "stable",
 		},
 	}, {
 		op:   "link-snap",
@@ -4450,7 +4536,7 @@ func (s *validationSetsSuite) TestInstallSnapRequiredForValidationSetCohortIgnor
 
 func (s *validationSetsSuite) TestInstallSnapReferencedByValidationSetWrongRevision(c *C) {
 	err := s.installSnapReferencedByValidationSet(c, "required", "3", snap.R(2), "", nil)
-	c.Assert(err, ErrorMatches, `cannot install snap "some-snap" at requested revision 2 without --ignore-validation, revision 3 required by validation sets: 16/foo/bar/1`)
+	c.Assert(err, ErrorMatches, `cannot install snap "some-snap" at revision 2 without --ignore-validation, revision 3 is required by validation sets: 16/foo/bar/1`)
 }
 
 func (s *validationSetsSuite) installManySnapReferencedByValidationSet(c *C, snapOnePresence, snapOneRequiredRev, snapTwoPresence, snapTwoRequiredRev string) error {
@@ -4663,7 +4749,7 @@ func (s *snapmgrTestSuite) TestInstallWithOutdatedPrereq(c *C) {
 	info := &snap.SideInfo{
 		Revision: snap.R(1),
 		SnapID:   "snap-content-slot-id",
-		RealName: "content-snap",
+		RealName: "snap-content-slot",
 	}
 	snapstate.Set(s.state, "snap-content-slot", &snapstate.SnapState{
 		Sequence: snapstatetest.NewSequenceFromSnapSideInfos([]*snap.SideInfo{info}),
@@ -4807,7 +4893,7 @@ func (s *snapmgrTestSuite) TestInstallPrereqIgnoreConflictInSameChange(c *C) {
 func (s *validationSetsSuite) TestInstallSnapReferencedByValidationSetWrongRevisionIgnoreValidationOK(c *C) {
 	// validity check: fails with validation
 	err := s.installSnapReferencedByValidationSet(c, "required", "3", snap.R(11), "", &snapstate.Flags{IgnoreValidation: false})
-	c.Assert(err, ErrorMatches, `cannot install snap "some-snap" at requested revision 11 without --ignore-validation, revision 3 required by validation sets: 16/foo/bar/1`)
+	c.Assert(err, ErrorMatches, `cannot install snap "some-snap" at revision 11 without --ignore-validation, revision 3 is required by validation sets: 16/foo/bar/1`)
 
 	// but doesn't fail with ignore-validation flag
 	err = s.installSnapReferencedByValidationSet(c, "required", "3", snap.R(11), "", &snapstate.Flags{IgnoreValidation: true})
@@ -5114,6 +5200,7 @@ func (s *snapmgrTestSuite) testRetainCorrectNumRevisions(c *C, installFn install
 		RealName: "some-snap",
 		SnapID:   "some-snap-id",
 		Revision: snap.R(1),
+		Channel:  "latest/stable",
 	}
 	snapstate.Set(s.state, "some-snap", &snapstate.SnapState{
 		Active:          true,
@@ -6196,52 +6283,119 @@ func (s *snapmgrTestSuite) TestInstallInstanceManyComponentsUndoRunThrough(c *C)
 	s.testInstallComponentsRunThrough(c, snapName, instanceKey, []string{"test-component", "kernel-modules-component"}, undo)
 }
 
-func undoInstallOps(snapName, instanceName string, snapRevision snap.Revision, components []string) []fakeOp {
+func undoOps(instanceName string, snapRevision, prevRev snap.Revision, newComponents, prevComponents []string) []fakeOp {
+	snapName, _ := snap.SplitInstanceName(instanceName)
+
+	forRefresh := !prevRev.Unset()
+	compRev := func(i int) snap.Revision {
+		if forRefresh {
+			return snap.R(i + 2)
+		}
+		return snap.R(i + 1)
+	}
+
+	var ops fakeOps
+
+	installedKmods := make([]*snap.ComponentSideInfo, 0, len(newComponents))
+	for i, compName := range newComponents {
+		csi := snap.ComponentSideInfo{
+			Component: naming.NewComponentRef(snapName, compName),
+			Revision:  compRev(i),
+		}
+		if strings.HasPrefix(newComponents[i], string(snap.KernelModulesComponent)) {
+			installedKmods = append(installedKmods, &csi)
+		}
+	}
+
+	prevInstalledKmods := make([]*snap.ComponentSideInfo, 0, len(prevComponents))
+	for i, compName := range prevComponents {
+		csi := snap.ComponentSideInfo{
+			Component: naming.NewComponentRef(snapName, compName),
+			Revision:  snap.R(i + 1),
+		}
+
+		if strings.HasPrefix(prevComponents[i], string(snap.KernelModulesComponent)) {
+			prevInstalledKmods = append(prevInstalledKmods, &csi)
+		}
+	}
+
+	if len(installedKmods) > 0 || len(prevInstalledKmods) > 0 {
+		ops = append(ops, fakeOp{
+			op:           "prepare-kernel-modules-components",
+			currentComps: installedKmods,
+			finalComps:   prevInstalledKmods,
+		})
+	}
+
 	snapMount := filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, snapRevision.String()))
-	ops := []fakeOp{{
+	ops = append(ops, []fakeOp{{
 		op: "update-aliases",
 	}, {
 		op:    "auto-connect:Undoing",
 		name:  instanceName,
 		revno: snapRevision,
-	}}
+	}}...)
 
-	for i := len(components) - 1; i >= 0; i-- {
+	for i := len(newComponents) - 1; i >= 0; i-- {
 		ops = append(ops, fakeOp{
 			op:   "unlink-component",
-			path: snap.ComponentMountDir(components[i], snap.R(i+1), instanceName),
+			path: snap.ComponentMountDir(newComponents[i], compRev(i), instanceName),
 		})
 	}
 
+	if !forRefresh {
+		ops = append(ops, fakeOp{
+			op:   "discard-namespace",
+			name: instanceName,
+		})
+	}
+
+	oldMount := "<no-old>"
+	oldSaveDir := "<no-old>"
+	if forRefresh {
+		oldMount = filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, prevRev.String()))
+		oldSaveDir = filepath.Join(dirs.SnapDataSaveDir, instanceName)
+	}
+
 	ops = append(ops, []fakeOp{{
-		op:   "discard-namespace",
-		name: instanceName,
-	}, {
 		op:                     "unlink-snap",
 		path:                   snapMount,
-		unlinkFirstInstallUndo: true,
+		unlinkFirstInstallUndo: !forRefresh,
 	}, {
 		op:    "setup-profiles:Undoing",
 		name:  instanceName,
 		revno: snapRevision,
+	}, {
+		op:   "undo-copy-snap-data",
+		path: snapMount,
+		old:  oldMount,
+	}, {
+		op:   "undo-setup-snap-save-data",
+		path: filepath.Join(dirs.SnapDataSaveDir, instanceName),
+		old:  oldSaveDir,
 	}}...)
 
-	for i := len(components) - 1; i >= 0; i-- {
+	if !forRefresh {
+		ops = append(ops, fakeOp{
+			op:   "remove-snap-data-dir",
+			name: instanceName,
+			path: filepath.Join(dirs.SnapDataDir, instanceName),
+		})
+	} else {
+		ops = append(ops, fakeOp{
+			op:   "link-snap",
+			path: filepath.Join(dirs.SnapMountDir, instanceName, prevRev.String()),
+		})
+	}
+
+	for i := len(newComponents) - 1; i >= 0; i-- {
 		csi := &snap.ComponentSideInfo{
-			Component: naming.NewComponentRef(snapName, components[i]),
-			Revision:  snap.R(i + 1),
+			Component: naming.NewComponentRef(snapName, newComponents[i]),
+			Revision:  compRev(i),
 		}
 
-		containerName := fmt.Sprintf("%s+%s", instanceName, components[i])
+		containerName := fmt.Sprintf("%s+%s", instanceName, newComponents[i])
 		filename := fmt.Sprintf("%s_%v.comp", containerName, csi.Revision)
-
-		if strings.HasPrefix(components[i], string(snap.KernelModulesComponent)) {
-			ops = append(ops, fakeOp{
-				op:            "remove-kernel-modules-components-setup",
-				compsToRemove: []*snap.ComponentSideInfo{csi},
-				finalComps:    []*snap.ComponentSideInfo{},
-			})
-		}
 
 		ops = append(ops, []fakeOp{{
 			op:                "undo-setup-component",
@@ -6255,18 +6409,6 @@ func undoInstallOps(snapName, instanceName string, snapRevision snap.Revision, c
 	}
 
 	ops = append(ops, []fakeOp{{
-		op:   "undo-copy-snap-data",
-		path: snapMount,
-		old:  "<no-old>",
-	}, {
-		op:   "undo-setup-snap-save-data",
-		path: filepath.Join(dirs.SnapDataSaveDir, instanceName),
-		old:  "<no-old>",
-	}, {
-		op:   "remove-snap-data-dir",
-		name: instanceName,
-		path: filepath.Join(dirs.SnapDataDir, instanceName),
-	}, {
 		op:    "undo-setup-snap",
 		name:  instanceName,
 		stype: "app",
@@ -6434,13 +6576,6 @@ func (s *snapmgrTestSuite) testInstallComponentsRunThrough(c *C, snapName, insta
 		name:  instanceName,
 		path:  filepath.Join(dirs.SnapBlobDir, snapFileName),
 		revno: snapRevision,
-	}, {
-		op:   "copy-data",
-		path: filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, snapRevision.String())),
-		old:  "<no-old>",
-	}, {
-		op:   "setup-snap-save-data",
-		path: filepath.Join(dirs.SnapDataSaveDir, instanceName),
 	}}
 
 	// ops for mounting a component (but not yet linking it)
@@ -6469,20 +6604,16 @@ func (s *snapmgrTestSuite) testInstallComponentsRunThrough(c *C, snapName, insta
 			containerName:     containerName,
 			containerFileName: filename,
 		}}...)
-
-		if strings.HasPrefix(compName, string(snap.KernelModulesComponent)) {
-			expected = append(expected, fakeOp{
-				op:           "setup-kernel-modules-components",
-				currentComps: []*snap.ComponentSideInfo{},
-				compsToInstall: []*snap.ComponentSideInfo{{
-					Component: naming.NewComponentRef(snapName, compName),
-					Revision:  snap.R(i + 1),
-				}},
-			})
-		}
 	}
 
 	expected = append(expected, []fakeOp{{
+		op:   "copy-data",
+		path: filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, snapRevision.String())),
+		old:  "<no-old>",
+	}, {
+		op:   "setup-snap-save-data",
+		path: filepath.Join(dirs.SnapDataSaveDir, instanceName),
+	}, {
 		op:    "setup-profiles:Doing",
 		name:  instanceName,
 		revno: snapRevision,
@@ -6516,8 +6647,27 @@ func (s *snapmgrTestSuite) testInstallComponentsRunThrough(c *C, snapName, insta
 		op: "update-aliases",
 	}}...)
 
+	kmodComps := make([]*snap.ComponentSideInfo, 0, len(components))
+	for i, compName := range components {
+		csi := snap.ComponentSideInfo{
+			Component: naming.NewComponentRef(snapName, compName),
+			Revision:  snap.R(i + 1),
+		}
+		if strings.HasPrefix(components[i], string(snap.KernelModulesComponent)) {
+			kmodComps = append(kmodComps, &csi)
+		}
+	}
+
+	if len(kmodComps) > 0 {
+		expected = append(expected, fakeOp{
+			op:           "prepare-kernel-modules-components",
+			currentComps: []*snap.ComponentSideInfo{},
+			finalComps:   kmodComps,
+		})
+	}
+
 	if undo {
-		expected = append(expected, undoInstallOps(snapName, instanceName, snapRevision, components)...)
+		expected = append(expected, undoOps(instanceName, snapRevision, snap.Revision{}, components, nil)...)
 	} else {
 		expected = append(expected, fakeOp{
 			op:    "cleanup-trash",
@@ -6571,6 +6721,304 @@ func (s *snapmgrTestSuite) testInstallComponentsRunThrough(c *C, snapName, insta
 	}
 }
 
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathNoneRunThrough(c *C) {
+	const (
+		undo        = false
+		snapName    = "test-snap"
+		instanceKey = ""
+		removePaths = false
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, nil, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathOneRunThrough(c *C) {
+	const (
+		undo        = false
+		snapName    = "test-snap"
+		instanceKey = ""
+		removePaths = false
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, []string{"test-component"}, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathManyRunThrough(c *C) {
+	const (
+		undo        = false
+		snapName    = "test-snap"
+		instanceKey = ""
+		removePaths = false
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, []string{"test-component", "kernel-modules-component"}, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathManyInstanceRunThrough(c *C) {
+	const (
+		undo        = false
+		snapName    = "test-snap"
+		instanceKey = ""
+		removePaths = false
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, []string{"test-component", "kernel-modules-component"}, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathInstanceRunThroughUndo(c *C) {
+	const (
+		undo        = true
+		snapName    = "some-kernel"
+		instanceKey = ""
+		removePaths = false
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, []string{"test-component", "kernel-modules-component"}, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathManyRemovePaths(c *C) {
+	const (
+		undo        = false
+		snapName    = "test-snap"
+		instanceKey = ""
+		removePaths = true
+	)
+	s.testInstallComponentsFromPathRunThrough(c, snapName, instanceKey, []string{"test-component", "kernel-modules-component"}, undo, removePaths)
+}
+
+func (s *snapmgrTestSuite) testInstallComponentsFromPathRunThrough(c *C, snapName, instanceKey string, compNames []string, undo bool, removePaths bool) {
+	s.state.Lock()
+	defer s.state.Unlock()
+
+	sort.Strings(compNames)
+
+	// use the real thing for this one
+	snapstate.MockOpenSnapFile(backend.OpenSnapFile)
+
+	if instanceKey != "" {
+		tr := config.NewTransaction(s.state)
+		tr.Set("core", "experimental.parallel-instances", true)
+		tr.Commit()
+	}
+
+	const snapID = "test-snap-id"
+	snapRevision := snap.R(11)
+	instanceName := snap.InstanceName(snapName, instanceKey)
+
+	compNameToType := func(name string) snap.ComponentType {
+		typ := strings.TrimSuffix(name, "-component")
+		if typ == name {
+			c.Fatalf("unexpected component name %q", name)
+		}
+		return snap.ComponentType(typ)
+	}
+
+	components := make(map[*snap.ComponentSideInfo]string, len(compNames))
+	for i, compName := range compNames {
+		csi := &snap.ComponentSideInfo{
+			Component: naming.NewComponentRef(snapName, compName),
+			Revision:  snap.R(i + 1),
+		}
+
+		componentYaml := fmt.Sprintf(`component: %s
+type: %s
+version: 1.0
+`, csi.Component, compNameToType(compName))
+
+		components[csi] = snaptest.MakeTestComponent(c, componentYaml)
+	}
+
+	s.AddCleanup(snapstate.MockReadComponentInfo(func(
+		compMntDir string, snapInfo *snap.Info, csi *snap.ComponentSideInfo,
+	) (*snap.ComponentInfo, error) {
+		for i, compName := range compNames {
+			if compMntDir == snap.ComponentMountDir(compName, snap.R(i+1), instanceName) {
+				return &snap.ComponentInfo{}, nil
+			}
+		}
+		return nil, fmt.Errorf("unexpected component mount dir %q", compMntDir)
+	}))
+
+	snapPath := makeTestSnap(c, `name: test-snap
+version: 1.0
+type: kernel
+components:
+  test-component:
+    type: test
+  kernel-modules-component:
+    type: kernel-modules
+`)
+	chg := s.state.NewChange("install", "install a local snap")
+
+	si := &snap.SideInfo{
+		RealName: snapName,
+		SnapID:   snapID,
+		Revision: snapRevision,
+	}
+
+	goal := snapstate.PathInstallGoal(instanceName, snapPath, si, components, snapstate.RevisionOptions{})
+
+	info, ts, err := snapstate.InstallOne(context.Background(), s.state, goal, snapstate.Options{
+		Flags: snapstate.Flags{
+			Required:       true,
+			RemoveSnapPath: removePaths,
+		},
+	})
+	c.Assert(err, IsNil)
+	c.Check(info.InstanceName(), Equals, instanceName)
+	c.Check(info.Revision, Equals, snapRevision)
+
+	chg.AddAll(ts)
+
+	if undo {
+		last := ts.Tasks()[len(ts.Tasks())-1]
+		terr := s.state.NewTask("error-trigger", "provoking total undo")
+		terr.WaitFor(last)
+		chg.AddTask(terr)
+	}
+
+	s.settle(c)
+
+	c.Assert(chg.IsReady(), Equals, true, Commentf("change tasks:\n%s", printTasks(chg.Tasks())))
+
+	if undo {
+		c.Assert(chg.Err(), NotNil, Commentf("change tasks:\n%s", printTasks(chg.Tasks())))
+	} else {
+		c.Assert(chg.Err(), IsNil, Commentf("change tasks:\n%s", printTasks(chg.Tasks())))
+	}
+
+	expected := fakeOps{{
+		op:  "current",
+		old: "<no-current>",
+	}, {
+		op:    "setup-snap",
+		name:  instanceName,
+		path:  snapPath,
+		revno: snapRevision,
+	}}
+
+	for i, compName := range compNames {
+		containerName := fmt.Sprintf("%s+%s", instanceName, compName)
+		filename := fmt.Sprintf("%s_%d.comp", containerName, i+1)
+		expected = append(expected, fakeOp{
+			op:                "setup-component",
+			containerName:     containerName,
+			containerFileName: filename,
+		})
+	}
+
+	expected = append(expected, []fakeOp{{
+		op:    "update-gadget-assets:Doing",
+		name:  instanceName,
+		revno: snapRevision,
+	}, {
+		op:   "copy-data",
+		path: filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, snapRevision.String())),
+		old:  "<no-old>",
+	}, {
+		op:   "setup-snap-save-data",
+		path: filepath.Join(dirs.SnapDataSaveDir, instanceName),
+	}, {
+		op:    "setup-profiles:Doing",
+		name:  instanceName,
+		revno: snapRevision,
+	}, {
+		op:    "candidate",
+		sinfo: *si,
+	}, {
+		op:   "link-snap",
+		path: filepath.Join(dirs.SnapMountDir, filepath.Join(instanceName, snapRevision.String())),
+	}}...)
+
+	for i, compName := range compNames {
+		expected = append(expected, fakeOp{
+			op:   "link-component",
+			path: snap.ComponentMountDir(compName, snap.R(i+1), instanceName),
+		})
+	}
+
+	expected = append(expected, []fakeOp{{
+		op:    "auto-connect:Doing",
+		name:  instanceName,
+		revno: snapRevision,
+	}, {
+		op: "update-aliases",
+	}}...)
+
+	kmodComps := make([]*snap.ComponentSideInfo, 0, len(components))
+	for i, compName := range compNames {
+		if strings.HasPrefix(compName, string(snap.KernelModulesComponent)) {
+			kmodComps = append(kmodComps, &snap.ComponentSideInfo{
+				Component: naming.NewComponentRef(snapName, compName),
+				Revision:  snap.R(i + 1),
+			})
+		}
+	}
+
+	if len(kmodComps) > 0 {
+		expected = append(expected, fakeOp{
+			op:           "prepare-kernel-modules-components",
+			currentComps: []*snap.ComponentSideInfo{},
+			finalComps:   kmodComps,
+		})
+	}
+
+	if undo {
+		expected = append(expected, undoOps(instanceName, snapRevision, snap.Revision{}, compNames, nil)...)
+	} else {
+		expected = append(expected, fakeOp{
+			op:    "cleanup-trash",
+			name:  instanceName,
+			revno: snapRevision,
+		})
+	}
+
+	c.Assert(s.fakeBackend.ops.Ops(), DeepEquals, expected.Ops())
+	c.Assert(s.fakeBackend.ops, DeepEquals, expected)
+
+	if undo {
+		var snapst snapstate.SnapState
+		err = snapstate.Get(s.state, instanceName, &snapst)
+		c.Assert(err, testutil.ErrorIs, state.ErrNoState)
+	} else {
+		// verify snap in the system state
+		var snapst snapstate.SnapState
+		err = snapstate.Get(s.state, instanceName, &snapst)
+		c.Assert(err, IsNil)
+
+		c.Check(snapst.Active, Equals, true)
+		c.Check(snapst.TrackingChannel, Equals, "")
+		c.Check(snapst.Required, Equals, true)
+
+		c.Check(snapst.CurrentSideInfo(), DeepEquals, &snap.SideInfo{
+			RealName: snapName,
+			Revision: snapRevision,
+			SnapID:   snapID,
+		})
+
+		var compst []*sequence.ComponentState
+		for i, compName := range compNames {
+			compst = append(compst, &sequence.ComponentState{
+				SideInfo: &snap.ComponentSideInfo{
+					Component: naming.NewComponentRef(snapName, compName),
+					Revision:  snap.R(i + 1),
+				},
+				CompType: compNameToType(compName),
+			})
+		}
+
+		// make sure that all of our components are accounted for
+		c.Assert(snapst.Sequence.Revisions[0].Components, DeepEquals, compst)
+
+		// if we requested that the snap be removed after install, then make
+		// sure it is gone. otherwise, make sure that it is still there
+		fileChecker := testutil.FilePresent
+		if removePaths {
+			fileChecker = testutil.FileAbsent
+		}
+
+		c.Check(snapPath, fileChecker)
+		for _, compPath := range components {
+			c.Check(compPath, fileChecker)
+		}
+	}
+}
+
 func printTasks(ts []*state.Task) string {
 	var b strings.Builder
 	for _, t := range ts {
@@ -6583,4 +7031,100 @@ func printTasks(ts []*state.Task) string {
 		}
 	}
 	return b.String()
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathInvalidComponentFile(c *C) {
+	s.state.Lock()
+	defer s.state.Unlock()
+
+	// use the real thing for this one
+	snapstate.MockOpenSnapFile(backend.OpenSnapFile)
+
+	const (
+		snapID        = "test-snap-id"
+		snapName      = "test-snap"
+		componentName = "test-component"
+	)
+	snapRevision := snap.R(11)
+
+	csi := snap.ComponentSideInfo{
+		Component: naming.NewComponentRef(snapName, componentName),
+		Revision:  snap.R(1),
+	}
+
+	compPath := filepath.Join(c.MkDir(), "invalid-component")
+	err := os.WriteFile(compPath, []byte("invalid-component"), 0644)
+	c.Assert(err, IsNil)
+
+	components := map[*snap.ComponentSideInfo]string{
+		&csi: compPath,
+	}
+
+	snapPath := makeTestSnap(c, `name: test-snap
+version: 1.0
+components:
+  test-component:
+    type: test
+`)
+	si := &snap.SideInfo{
+		RealName: snapName,
+		SnapID:   snapID,
+		Revision: snapRevision,
+	}
+
+	goal := snapstate.PathInstallGoal(snapName, snapPath, si, components, snapstate.RevisionOptions{})
+	_, _, err = snapstate.InstallOne(context.Background(), s.state, goal, snapstate.Options{})
+	c.Assert(err, ErrorMatches, fmt.Sprintf(`.*cannot process snap or snapdir: file "%s" is invalid.*`, compPath))
+}
+
+func (s *snapmgrTestSuite) TestInstallComponentsFromPathInvalidComponentName(c *C) {
+	s.state.Lock()
+	defer s.state.Unlock()
+
+	// use the real thing for this one
+	snapstate.MockOpenSnapFile(backend.OpenSnapFile)
+
+	const (
+		snapID        = "test-snap-id"
+		snapName      = "test-snap"
+		componentName = "Bad-component"
+	)
+	snapRevision := snap.R(11)
+
+	csi := snap.ComponentSideInfo{
+		Component: naming.NewComponentRef(snapName, componentName),
+		Revision:  snap.R(1),
+	}
+
+	components := map[*snap.ComponentSideInfo]string{
+		&csi: "",
+	}
+
+	snapPath := makeTestSnap(c, `name: test-snap
+version: 1.0
+components:
+  test-component:
+    type: test
+`)
+	si := &snap.SideInfo{
+		RealName: snapName,
+		SnapID:   snapID,
+		Revision: snapRevision,
+	}
+
+	goal := snapstate.PathInstallGoal(snapName, snapPath, si, components, snapstate.RevisionOptions{})
+	_, _, err := snapstate.InstallOne(context.Background(), s.state, goal, snapstate.Options{})
+	c.Assert(err, ErrorMatches, fmt.Sprintf(`invalid snap name: "%s"`, componentName))
+}
+
+func (s *snapmgrTestSuite) TestInstallWithRegistry(c *C) {
+	s.state.Lock()
+	defer s.state.Unlock()
+
+	chg := s.state.NewChange("test", "test change")
+	ts, err := snapstate.Install(context.Background(), s.state, "some-snap", &snapstate.RevisionOptions{Channel: "channel-for-registry"}, s.user.ID, snapstate.Flags{})
+	c.Assert(err, IsNil)
+	chg.AddAll(ts)
+
+	checkSnapsupHasRegistry(ts, c)
 }

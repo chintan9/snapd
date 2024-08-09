@@ -21,18 +21,26 @@ concurrency:
 
 jobs:
   snap-builds:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         toolchain:
           - default
           - FIPS
+        version:
+          # test version is a build of snapd with test keys and should
+          # only be installed by test runners. The pristine versions
+          # are the build that should be installed by human users.
+          - pristine
+          - test
     # only build the snap for pull requests, it's not needed on release branches
     # or on master since we have launchpad build recipes which do this already
     if: ${{ github.event_name == 'pull_request' }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
 
     - name: Select Go toolchain
       run: |
@@ -48,8 +56,21 @@ jobs:
                 exit 1
                 ;;
         esac
+        case "${{ matrix.version }}" in
+            pristine)
+                rm -f test-build
+                ;;
+            test)
+                touch test-build
+                ;;
+        esac
 
     - name: Build snapd snap
+      uses: snapcore/action-build@v1
+      with:
+        snapcraft-channel: 8.x/stable
+
+    - name: Build test snapd snap
       uses: snapcore/action-build@v1
       with:
         snapcraft-channel: 8.x/stable
@@ -71,7 +92,7 @@ jobs:
     - name: Uploading snapd snap artifact
       uses: actions/upload-artifact@v3
       with:
-        name: snap-files-${{ matrix.toolchain }}
+        name: snap-files-${{ matrix.toolchain }}-${{ matrix.version }}
         path: "*.snap"
 
   cache-build-deps:
@@ -592,12 +613,12 @@ jobs:
         verbose: true
 
   spread:
-    needs: [unit-tests]
+    needs: [unit-tests, snap-builds]
     # have spread jobs run on master on PRs only, but on both PRs and pushes to
     # release branches
     if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
     name: ${{ matrix.group }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, spread-enabled]
     strategy:
       # FIXME: enable fail-fast mode once spread can cancel an executing job.
       # Disable fail-fast mode as it doesn't function with spread. It seems
@@ -617,13 +638,13 @@ jobs:
             tests: 'tests/...'
           - group: centos
             backend: google-distro-2
-            systems: 'centos-7-64 centos-9-64'
+            systems: 'centos-9-64'
             tests: 'tests/...'
           - group: debian-req
             backend: google-distro-1
             systems: 'debian-11-64'
             tests: 'tests/...'
-          - group: debian-no-req
+          - group: debian-not-req
             backend: google-distro-1
             systems: 'debian-12-64 debian-sid-64'
             tests: 'tests/...'
@@ -637,7 +658,7 @@ jobs:
             tests: 'tests/...'
           - group: opensuse
             backend: google-distro-2
-            systems: 'opensuse-15.5-64 opensuse-tumbleweed-64'
+            systems: 'opensuse-15.5-64 opensuse-15.6-64 opensuse-tumbleweed-64'
             tests: 'tests/...'
           - group: ubuntu-trusty
             backend: google
@@ -786,12 +807,25 @@ jobs:
       run: |
           # Configure parameters to filter logs (these logs are sent read by grafana agent)
           CHANGE_ID="${{ github.event.number }}"
-          if [ -z "$PR_ID" ]; then
+          if [ -z "$CHANGE_ID" ]; then
             CHANGE_ID="main"
           fi
           CHANGE_ID="${CHANGE_ID}_n${{ github.run_attempt }}"
           # The log-filter tool is used to filter the spread logs to be stored
           echo FILTER_PARAMS="-o spread_$CHANGE_ID.filtered.log -e Debug -e WARNING: -f Failed=NO_LINES -f Error=NO_LINES"  >> $GITHUB_ENV
+
+    - name: Download built snap
+      uses: actions/download-artifact@v3
+      with:
+        name: snap-files-default-test
+        pattern: snapd_1337.*.snap
+        path: "${{ github.workspace }}/built-snap"
+
+    - name: Rename imported snap
+      run: |
+        for snap in built-snap/snapd_1337.*.snap; do
+          mv "${snap}" "${snap}.keep"
+        done
 
     - name: Run spread tests
       if: "!contains(github.event.pull_request.labels.*.name, 'Skip spread') && ( !startsWith(matrix.group, 'nested-') || contains(github.event.pull_request.labels.*.name, 'Run nested') )"
@@ -806,6 +840,16 @@ jobs:
             export NESTED_BUILD_SNAPD_FROM_CURRENT=true
             export NESTED_ENABLE_KVM=true
           fi
+
+          case "${{ matrix.systems }}" in
+            *-arm-*)
+              SPREAD_USE_PREBUILT_SNAPD_SNAP=false
+              ;;
+            *)
+              SPREAD_USE_PREBUILT_SNAPD_SNAP=true
+              ;;
+          esac
+          export SPREAD_USE_PREBUILT_SNAPD_SNAP
 
           if [[ "${{ matrix.systems }}" =~ amazon-linux-2023 ]]; then
               # Amazon Linux 2023 has no xdelta, however we cannot disable
@@ -826,7 +870,7 @@ jobs:
           # propagated; and we use a subshell as this option could trigger
           # undesired changes elsewhere
           echo "Running command: $SPREAD $RUN_TESTS"
-          (set -o pipefail; $SPREAD -no-debug-output -logs .logs $RUN_TESTS | ./tests/lib/external/snapd-testing-tools/utils/log-filter $FILTER_PARAMS | tee spread.log)
+          (set -o pipefail; $SPREAD -no-debug-output -logs .logs $RUN_TESTS | PYTHONDONTWRITEBYTECODE=1 ./tests/lib/external/snapd-testing-tools/utils/log-filter $FILTER_PARAMS | tee spread.log)
 
 
     - name: Uploading spread logs
@@ -850,7 +894,7 @@ jobs:
         if [ -e spread.log ]; then
             echo "Running spread log analyzer"
             issues_metadata='{"source_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
-            ./tests/lib/external/snapd-testing-tools/utils/log-parser spread.log --output spread-results.json --cut 100
+            PYTHONDONTWRITEBYTECODE=1 ./tests/lib/external/snapd-testing-tools/utils/log-parser spread.log --output spread-results.json --cut 100
             while IFS= read -r line; do
                 if [ ! -z "$line" ]; then
                     echo "Reporting spread error..."
@@ -866,7 +910,7 @@ jobs:
       run: |
           if [ -f spread.log ]; then
               echo "Running spread log parser"
-              ./tests/lib/external/snapd-testing-tools/utils/log-parser spread.log --output spread-results.json
+              PYTHONDONTWRITEBYTECODE=1 ./tests/lib/external/snapd-testing-tools/utils/log-parser spread.log --output spread-results.json
 
               # Add openstack backend definition to spread.yaml
               if [ "${{ matrix.backend }}" = openstack ]; then
@@ -874,7 +918,7 @@ jobs:
               fi
 
               echo "Running spread log analyzer"
-              ./tests/lib/external/snapd-testing-tools/utils/log-analyzer list-reexecute-tasks "$RUN_TESTS" spread-results.json > "$FAILED_TESTS_FILE"
+              PYTHONDONTWRITEBYTECODE=1 ./tests/lib/external/snapd-testing-tools/utils/log-analyzer list-reexecute-tasks "$RUN_TESTS" spread-results.json > "$FAILED_TESTS_FILE"
 
               echo "List of failed tests saved"
               cat "$FAILED_TESTS_FILE"

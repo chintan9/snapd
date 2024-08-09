@@ -269,7 +269,6 @@ func addAndBindImplicitComponentHook(componentInfo *ComponentInfo, snapInfo *Inf
 		return
 	}
 
-	// TODO: ignore unsupported implicit component hooks, or return an error?
 	if !IsComponentHookSupported(hook) {
 		logger.Noticef("ignoring unsupported implicit hook %q for component %q", componentInfo.Component, hook)
 		return
@@ -283,8 +282,12 @@ func addAndBindImplicitComponentHook(componentInfo *ComponentInfo, snapInfo *Inf
 		}
 	}
 
-	// TODO: if hooks ever get slots, then unscoped slots will need to be
+	// TODO:COMPS: if hooks ever get slots, then unscoped slots will need to be
 	// bound here
+
+	if componentInfo.Hooks == nil {
+		componentInfo.Hooks = make(map[string]*HookInfo)
+	}
 
 	componentInfo.Hooks[hook] = &HookInfo{
 		Snap:      snapInfo,

@@ -339,6 +339,15 @@ func (m *SnapManager) installOneBaseOrRequired(t *state.Task, snapName string, c
 		return true, nil
 	}
 
+	// if we are remodeling, then we should return early due to the way that
+	// tasks are ordered by the remodeling code. specifically, all snap
+	// downloads during a remodel happen prior to snap installation. thus,
+	// we cannot wait for snaps to be installed here. see remodelTasks for
+	// more information on how the tasks are ordered.
+	if deviceCtx.ForRemodeling() {
+		return nil, nil
+	}
+
 	if isInstalled {
 		if len(contentAttrs) > 0 {
 			// the default provider is already installed, update it if it's missing content attributes the snap needs
@@ -351,6 +360,7 @@ func (m *SnapManager) installOneBaseOrRequired(t *state.Task, snapName string, c
 		} else if ok {
 			return nil, onInFlight
 		}
+
 		return nil, nil
 	}
 
@@ -358,15 +368,6 @@ func (m *SnapManager) installOneBaseOrRequired(t *state.Task, snapName string, c
 	if ok, err := inProgress(snapName); err != nil {
 		return nil, err
 	} else if ok {
-		// if we are remodeling, then we should return early due to the way that
-		// tasks are ordered by the remodeling code. specifically, all snap
-		// downloads during a remodel happen prior to snap installation. thus,
-		// we cannot wait for snaps to be installed here. see remodelTasks for
-		// more information on how the tasks are ordered.
-		if deviceCtx.ForRemodeling() {
-			return nil, nil
-		}
-
 		return nil, onInFlight
 	}
 
@@ -1071,7 +1072,7 @@ func continueInhibitedAutoRefresh(st *state.State, snapName string) error {
 	}
 
 	flags := &Flags{IsAutoRefresh: true, IsContinuedAutoRefresh: true}
-	tss, err := autoRefreshPhase2(context.TODO(), st, []*refreshCandidate{hint}, flags, "")
+	tss, err := autoRefreshPhase2(st, []*refreshCandidate{hint}, flags, "")
 	if err != nil {
 		return err
 	}
@@ -1428,6 +1429,10 @@ func (m *SnapManager) doUnlinkCurrentSnap(t *state.Task, _ *tomb.Tomb) (err erro
 
 	snapsup, snapst, err := snapSetupAndState(t)
 	if err != nil {
+		return err
+	}
+
+	if err := saveCurrentKernelModuleComponents(t, snapsup, snapst); err != nil {
 		return err
 	}
 
@@ -3262,6 +3267,83 @@ func (m *SnapManager) undoStopSnapServices(t *state.Task, _ *tomb.Tomb) error {
 	return nil
 }
 
+func (m *SnapManager) doKillSnapApps(t *state.Task, _ *tomb.Tomb) (err error) {
+	st := t.State()
+	st.Lock()
+	defer st.Unlock()
+
+	snapsup, snapst, err := snapSetupAndState(t)
+	if err != nil {
+		return err
+	}
+	snapName := snapsup.InstanceName()
+
+	inhibitInfo := runinhibit.InhibitInfo{Previous: snapsup.Revision()}
+	if err := runinhibit.LockWithHint(snapName, runinhibit.HintInhibitedForRemove, inhibitInfo); err != nil {
+		return err
+	}
+	// Note: The snap hint lock file is completely removed in “discard-snap”
+	// so we only need to unlock it in case of an error here or during undo.
+	defer func() {
+		// Unlock snap inhibition if anything goes wrong afterwards to
+		// avoid keeping the snap stuck at this inhibited state.
+		if err != nil {
+			runinhibit.Unlock(snapName)
+		}
+	}()
+
+	var reason snap.AppKillReason
+	if err := t.Get("kill-reason", &reason); err != nil && !errors.Is(err, state.ErrNoState) {
+		return err
+	}
+
+	perfTimings := state.TimingsForTask(t)
+	defer perfTimings.Save(st)
+
+	st.Unlock()
+	defer st.Lock()
+	pb := NewTaskProgressAdapterUnlocked(t)
+
+	if err := m.backend.KillSnapApps(snapName, reason, pb, perfTimings); err != nil {
+		return err
+	}
+
+	currentInfo, err := snapst.CurrentInfo()
+	if err != nil {
+		return err
+	}
+	svcs := currentInfo.Services()
+	if len(svcs) == 0 {
+		return nil
+	}
+
+	// Make sure snap services are stopped because they may have started through snapctl
+	err = m.backend.StopServices(svcs, snap.ServiceStopReason(reason), pb, perfTimings)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *SnapManager) undoKillSnapApps(t *state.Task, _ *tomb.Tomb) error {
+	st := t.State()
+	st.Lock()
+	defer st.Unlock()
+
+	snapsup, err := TaskSnapSetup(t)
+	if err != nil {
+		return err
+	}
+
+	if err := runinhibit.Unlock(snapsup.InstanceName()); err != nil {
+		return err
+	}
+
+	// No need to start services here because undoStopSnapServices will do that
+	return nil
+}
+
 func (m *SnapManager) doUnlinkSnap(t *state.Task, _ *tomb.Tomb) error {
 	// invoked only if snap has a current active revision, during remove or
 	// disable
@@ -4543,7 +4625,7 @@ func (m *SnapManager) doConditionalAutoRefresh(t *state.Task, tomb *tomb.Tomb) e
 		return nil
 	}
 
-	updateTss, err := autoRefreshPhase2(context.TODO(), st, snaps, nil, t.Change().ID())
+	updateTss, err := autoRefreshPhase2(st, snaps, nil, t.Change().ID())
 	if err != nil {
 		return err
 	}
@@ -4929,7 +5011,7 @@ var getDirMigrationOpts = func(st *state.State, snapst *SnapState, snapsup *Snap
 	return opts, nil
 }
 
-func (m *SnapManager) doSetupKernelSnap(t *state.Task, _ *tomb.Tomb) error {
+func (m *SnapManager) doPrepareKernelSnap(t *state.Task, _ *tomb.Tomb) error {
 	st := t.State()
 	st.Lock()
 	defer st.Unlock()
@@ -4968,7 +5050,7 @@ func (m *SnapManager) doSetupKernelSnap(t *state.Task, _ *tomb.Tomb) error {
 	return nil
 }
 
-func (m *SnapManager) undoSetupKernelSnap(t *state.Task, _ *tomb.Tomb) error {
+func (m *SnapManager) undoPrepareKernelSnap(t *state.Task, _ *tomb.Tomb) error {
 	st := t.State()
 	st.Lock()
 	defer st.Unlock()
@@ -4999,7 +5081,7 @@ func (m *SnapManager) undoSetupKernelSnap(t *state.Task, _ *tomb.Tomb) error {
 	return nil
 }
 
-func (m *SnapManager) doCleanupOldKernelSnap(t *state.Task, _ *tomb.Tomb) error {
+func (m *SnapManager) doDiscardOldKernelSnapSetup(t *state.Task, _ *tomb.Tomb) error {
 	st := t.State()
 	st.Lock()
 	defer st.Unlock()
@@ -5049,7 +5131,7 @@ func (m *SnapManager) doCleanupOldKernelSnap(t *state.Task, _ *tomb.Tomb) error 
 	return nil
 }
 
-func (m *SnapManager) undoCleanupOldKernelSnap(t *state.Task, _ *tomb.Tomb) error {
+func (m *SnapManager) undoDiscardOldKernelSnapSetup(t *state.Task, _ *tomb.Tomb) error {
 	st := t.State()
 	st.Lock()
 	defer st.Unlock()
